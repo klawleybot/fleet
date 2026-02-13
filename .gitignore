@@ -1,0 +1,10 @@
+node_modules
+.DS_Store
+dist
+.turbo
+.env
+.env.local
+*.db
+*.db-shm
+*.db-wal
+coverage

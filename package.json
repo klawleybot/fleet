@@ -1,0 +1,16 @@
+{
+  "name": "pump-it-up",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "packages/server",
+    "packages/web"
+  ],
+  "scripts": {
+    "dev": "yarn workspace @pump-it-up/server dev",
+    "dev:server": "yarn workspace @pump-it-up/server dev",
+    "dev:web": "yarn workspace @pump-it-up/web dev",
+    "build": "yarn workspaces foreach -pt run build",
+    "typecheck": "yarn workspaces foreach -pt run typecheck"
+  }
+}
