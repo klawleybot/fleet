@@ -4,7 +4,13 @@ import {
   zoraFactoryAbi,
   buildDeployCalldata,
   parseCoinCreatedLogs,
+  encodeDopplerPoolConfig,
+  decodeDopplerPoolConfig,
   ZORA_FACTORY_ADDRESS,
+  BLDR_TOKEN_SEPOLIA,
+  DOPPLER_PRESET_LOW,
+  DOPPLER_PRESET_HIGH,
+  defaultCurrencyForChain,
 } from "../src/services/coinLauncher.js";
 import { encodeEventTopics, encodeAbiParameters } from "viem";
 
@@ -12,9 +18,59 @@ describe("coinLauncher", () => {
   const RECIPIENT: Address = "0x1111111111111111111111111111111111111111";
   const REFERRAL: Address = "0x2222222222222222222222222222222222222222";
 
+  describe("encodeDopplerPoolConfig / decodeDopplerPoolConfig", () => {
+    it("roundtrips with default LOW preset", () => {
+      const encoded = encodeDopplerPoolConfig(
+        BLDR_TOKEN_SEPOLIA,
+        DOPPLER_PRESET_LOW.tickLower,
+        DOPPLER_PRESET_LOW.tickUpper,
+        DOPPLER_PRESET_LOW.numDiscoveryPositions,
+        DOPPLER_PRESET_LOW.maxDiscoverySupplyShare,
+      );
+
+      expect(encoded).toMatch(/^0x[0-9a-fA-F]+$/);
+
+      const decoded = decodeDopplerPoolConfig(encoded);
+      expect(decoded.version).toBe(4);
+      expect(decoded.currency.toLowerCase()).toBe(BLDR_TOKEN_SEPOLIA.toLowerCase());
+      expect([...decoded.tickLower]).toEqual([29800, 45800, 49800]);
+      expect([...decoded.tickUpper]).toEqual([49800, 51800, 51800]);
+      expect([...decoded.numDiscoveryPositions]).toEqual([11, 11, 11]);
+      expect([...decoded.maxDiscoverySupplyShare]).toEqual([
+        250000000000000000n, 300000000000000000n, 150000000000000000n,
+      ]);
+    });
+
+    it("roundtrips with HIGH preset and ETH currency", () => {
+      const encoded = encodeDopplerPoolConfig(
+        zeroAddress,
+        DOPPLER_PRESET_HIGH.tickLower,
+        DOPPLER_PRESET_HIGH.tickUpper,
+        DOPPLER_PRESET_HIGH.numDiscoveryPositions,
+        DOPPLER_PRESET_HIGH.maxDiscoverySupplyShare,
+      );
+
+      const decoded = decodeDopplerPoolConfig(encoded);
+      expect(decoded.version).toBe(4);
+      expect(decoded.currency).toBe(zeroAddress);
+      expect([...decoded.tickLower]).toEqual([19800, 35800, 39800]);
+    });
+  });
+
+  describe("defaultCurrencyForChain", () => {
+    it("returns BLDR on Sepolia", () => {
+      expect(defaultCurrencyForChain(84532)).toBe(BLDR_TOKEN_SEPOLIA);
+    });
+
+    it("returns address(0) on mainnet", () => {
+      expect(defaultCurrencyForChain(8453)).toBe(zeroAddress);
+    });
+  });
+
   describe("buildDeployCalldata", () => {
-    it("encodes a minimal deploy call (ETH, no referral)", () => {
+    it("encodes a deploy call with poolConfig bytes (Sepolia defaults)", () => {
       const data = buildDeployCalldata({
+        chainId: 84532,
         payoutRecipient: RECIPIENT,
         name: "TestCoin",
         symbol: "TC",
@@ -28,24 +84,28 @@ describe("coinLauncher", () => {
 
       expect(decoded.functionName).toBe("deploy");
       expect(decoded.args[0]).toBe(RECIPIENT); // payoutRecipient
-      expect(decoded.args[1]).toEqual([]); // owners
+      expect(decoded.args[1]).toEqual([RECIPIENT]); // owners (at least one required)
       expect(decoded.args[2]).toBe("https://example.com/meta.json"); // uri
       expect(decoded.args[3]).toBe("TestCoin"); // name
       expect(decoded.args[4]).toBe("TC"); // symbol
-      expect(decoded.args[5]).toBe(zeroAddress); // platformReferrer
-      expect(decoded.args[6]).toBe(zeroAddress); // currency (ETH)
-      expect(decoded.args[7]).toBe(0); // tickSpacing
-      expect(decoded.args[8]).toBe(0n); // initialPurchase
+      // args[5] is poolConfig bytes — verify it decodes correctly
+      const poolConfig = decodeDopplerPoolConfig(decoded.args[5] as `0x${string}`);
+      expect(poolConfig.version).toBe(4);
+      expect(poolConfig.currency.toLowerCase()).toBe(BLDR_TOKEN_SEPOLIA.toLowerCase());
+      expect(decoded.args[6]).toBe(zeroAddress); // platformReferrer
+      expect(decoded.args[7]).toBe(0n); // initialPurchase
     });
 
     it("encodes deploy with all optional params", () => {
       const data = buildDeployCalldata({
+        chainId: 8453,
         payoutRecipient: RECIPIENT,
         name: "FancyCoin",
         symbol: "FC",
         tokenURI: "ipfs://Qm123",
         platformReferral: REFERRAL,
         currency: "0x4200000000000000000000000000000000000006" as Address,
+        marketCapPreset: "high",
         initialPurchaseWei: 1_000_000_000_000_000n,
       });
 
@@ -55,11 +115,13 @@ describe("coinLauncher", () => {
       });
 
       expect(decoded.functionName).toBe("deploy");
-      expect(decoded.args[5]).toBe(REFERRAL);
-      expect(decoded.args[6]).toBe(
+      const poolConfig = decodeDopplerPoolConfig(decoded.args[5] as `0x${string}`);
+      expect(poolConfig.currency.toLowerCase()).toBe(
         "0x4200000000000000000000000000000000000006",
       );
-      expect(decoded.args[8]).toBe(1_000_000_000_000_000n);
+      expect([...poolConfig.tickLower]).toEqual(DOPPLER_PRESET_HIGH.tickLower);
+      expect(decoded.args[6]).toBe(REFERRAL);
+      expect(decoded.args[7]).toBe(1_000_000_000_000_000n);
     });
   });
 

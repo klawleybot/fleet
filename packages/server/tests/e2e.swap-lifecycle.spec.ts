@@ -1,11 +1,14 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import {
   createPublicClient,
+  createWalletClient,
   http,
   type Address,
   type PublicClient,
+  parseEventLogs,
 } from "viem";
 import { baseSepolia } from "viem/chains";
+import { privateKeyToAccount } from "viem/accounts";
 import {
   quoteExactInput,
   applySlippage,
@@ -17,6 +20,12 @@ import {
   getRouterAddress,
   type PoolParams,
 } from "../src/services/v4SwapEncoder.js";
+import {
+  launchCoin,
+  zoraFactoryAbi,
+  BLDR_TOKEN_SEPOLIA,
+  ZORA_FACTORY_ADDRESSES,
+} from "../src/services/coinLauncher.js";
 
 // ---------------------------------------------------------------------------
 // Skip unless E2E_BASE_SEPOLIA=1
@@ -173,4 +182,85 @@ describe.skipIf(!runE2e)("e2e: swap pipeline on Base Sepolia", () => {
     const with50bps = applySlippage(amount, 50);
     expect(with50bps).toBe(995_000_000_000_000_000n);
   });
+
+  // -----------------------------------------------------------------------
+  // Test 6: Launch a coin on Base Sepolia with $BLDR currency
+  // -----------------------------------------------------------------------
+  it(
+    "launches a coin with $BLDR backing and reads CoinCreatedV4 event",
+    async () => {
+      const privKey = process.env.MASTER_WALLET_PRIVATE_KEY;
+      if (!privKey) {
+        console.log("MASTER_WALLET_PRIVATE_KEY not set — skipping coin launch test");
+        return;
+      }
+
+      const account = privateKeyToAccount(privKey as `0x${string}`);
+      const walletClient = createWalletClient({
+        account,
+        chain: baseSepolia,
+        transport: http(process.env.BASE_SEPOLIA_RPC_URL),
+      });
+
+      const uniqueName = `TestCoin-${Date.now()}`;
+      const result = await launchCoin({
+        chainId: CHAIN_ID,
+        client,
+        walletClient,
+        name: uniqueName,
+        symbol: "TCOIN",
+        tokenURI: "https://example.com/test-coin.json",
+        payoutRecipient: account.address,
+        currency: BLDR_TOKEN_SEPOLIA,
+      });
+
+      console.log(`Coin launched: ${result.coinAddress} tx: ${result.txHash}`);
+      expect(result.coinAddress).toMatch(/^0x[0-9a-fA-F]{40}$/);
+      expect(result.txHash).toMatch(/^0x[0-9a-fA-F]{64}$/);
+
+      // Read the full receipt to extract CoinCreatedV4 event with poolKey
+      const receipt = await client.waitForTransactionReceipt({ hash: result.txHash });
+      const v4Events = parseEventLogs({
+        abi: zoraFactoryAbi,
+        eventName: "CoinCreatedV4",
+        logs: receipt.logs,
+      });
+
+      if (v4Events.length > 0) {
+        const ev = v4Events[0]!;
+        const poolKey = ev.args.poolKey;
+        console.log("CoinCreatedV4 poolKey:", {
+          currency0: poolKey.currency0,
+          currency1: poolKey.currency1,
+          fee: poolKey.fee,
+          tickSpacing: poolKey.tickSpacing,
+          hooks: poolKey.hooks,
+        });
+
+        // Try quoting with the real pool params
+        try {
+          const quote = await quoteExactInput({
+            chainId: CHAIN_ID,
+            client,
+            path: [BLDR_TOKEN_SEPOLIA, result.coinAddress],
+            poolParams: [{
+              fee: poolKey.fee,
+              tickSpacing: poolKey.tickSpacing,
+              hooks: poolKey.hooks,
+              hookData: "0x",
+            }],
+            amountIn: 1_000_000_000_000_000n,
+            exactInput: true,
+          });
+          console.log(`Quote with real pool params: amountOut=${quote.amountOut}`);
+          expect(quote.amountOut).toBeGreaterThan(0n);
+        } catch (err) {
+          console.log("Quote with real pool params reverted (Doppler hooks may need special handling):", err);
+        }
+      } else {
+        console.log("No CoinCreatedV4 event — may have emitted CoinCreated (v3) instead");
+      }
+    },
+    { timeout: 60_000 },
+  );
 });

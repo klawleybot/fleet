@@ -4,6 +4,8 @@ import {
   type Log,
   parseEventLogs,
   encodeFunctionData,
+  encodeAbiParameters,
+  decodeAbiParameters,
   zeroAddress,
 } from "viem";
 
@@ -33,19 +35,87 @@ export const ZORA_FACTORY_ADDRESSES: Record<number, Address> = {
 export const ZORA_FACTORY_ADDRESS: Address =
   "0x777777751622c0d3258f214F9DF38E35BF45baF3";
 
+/** $BLDR token on Base Sepolia (test backing currency). */
+export const BLDR_TOKEN_SEPOLIA: Address =
+  "0x1121c8e28dcf9C0C528f13A615840Df8D3CCF76B";
+
 const ZERO_ADDRESS: Address = zeroAddress;
+
+// ---------------------------------------------------------------------------
+// Doppler Pool Config encode/decode
+// ---------------------------------------------------------------------------
+
+const POOL_CONFIG_ABI_PARAMS = [
+  { type: "uint8", name: "version" },
+  { type: "address", name: "currency" },
+  { type: "int24[]", name: "tickLower" },
+  { type: "int24[]", name: "tickUpper" },
+  { type: "uint16[]", name: "numDiscoveryPositions" },
+  { type: "uint256[]", name: "maxDiscoverySupplyShare" },
+] as const;
+
+export function decodeDopplerPoolConfig(poolConfig: `0x${string}`) {
+  const [version, currency, tickLower, tickUpper, numDiscoveryPositions, maxDiscoverySupplyShare] =
+    decodeAbiParameters(POOL_CONFIG_ABI_PARAMS, poolConfig);
+  return { version, currency, tickLower, tickUpper, numDiscoveryPositions, maxDiscoverySupplyShare };
+}
+
+export function encodeDopplerPoolConfig(
+  currency: `0x${string}`,
+  tickLower: readonly number[],
+  tickUpper: readonly number[],
+  numDiscoveryPositions: readonly number[],
+  maxDiscoverySupplyShare: readonly bigint[],
+): `0x${string}` {
+  return encodeAbiParameters(
+    POOL_CONFIG_ABI_PARAMS,
+    [4, currency, tickLower, tickUpper, numDiscoveryPositions, maxDiscoverySupplyShare],
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Default pool config presets
+// ---------------------------------------------------------------------------
+
+export interface DopplerPoolPreset {
+  tickLower: readonly number[];
+  tickUpper: readonly number[];
+  numDiscoveryPositions: readonly number[];
+  maxDiscoverySupplyShare: readonly bigint[];
+}
+
+/** LOW starting market cap — from successful Base Sepolia deploys. */
+export const DOPPLER_PRESET_LOW: DopplerPoolPreset = {
+  tickLower: [29800, 45800, 49800],
+  tickUpper: [49800, 51800, 51800],
+  numDiscoveryPositions: [11, 11, 11],
+  maxDiscoverySupplyShare: [250000000000000000n, 300000000000000000n, 150000000000000000n],
+};
+
+/** HIGH starting market cap — wider initial range. */
+export const DOPPLER_PRESET_HIGH: DopplerPoolPreset = {
+  tickLower: [19800, 35800, 39800],
+  tickUpper: [39800, 41800, 41800],
+  numDiscoveryPositions: [11, 11, 11],
+  maxDiscoverySupplyShare: [250000000000000000n, 300000000000000000n, 150000000000000000n],
+};
+
+/** Default currency per chain. Sepolia uses $BLDR; mainnet uses native ETH (address(0)). */
+export function defaultCurrencyForChain(chainId: number): Address {
+  if (chainId === 84532) return BLDR_TOKEN_SEPOLIA;
+  return ZERO_ADDRESS;
+}
 
 // ---------------------------------------------------------------------------
 // ABI (minimal – only what we need)
 // ---------------------------------------------------------------------------
 
 /**
- * Simplest `deploy` overload on ZoraFactory (content coin, no post-deploy hook):
- *   deploy(payoutRecipient, owners[], uri, name, symbol, platformReferrer,
- *          currency, tickSpacing(int24), initialPurchaseWei(uint256))
+ * `deploy` overload 2 — takes `bytes poolConfig` (Doppler multi-curve encoding):
+ *   deploy(payoutRecipient, owners[], uri, name, symbol, poolConfig, platformReferrer, initialPurchaseWei)
  *   → (coinAddress, amountOut)
  *
- * `CoinCreated` event carries the new coin + pool addresses.
+ * `CoinCreated` / `CoinCreatedV4` events carry the new coin + pool info.
  */
 export const zoraFactoryAbi = [
   {
@@ -57,9 +127,8 @@ export const zoraFactoryAbi = [
       { name: "uri", type: "string" },
       { name: "name", type: "string" },
       { name: "symbol", type: "string" },
+      { name: "poolConfig", type: "bytes" },
       { name: "platformReferrer", type: "address" },
-      { name: "currency", type: "address" },
-      { name: "", type: "int24" },
       { name: "", type: "uint256" },
     ],
     outputs: [
@@ -131,7 +200,12 @@ export interface CoinLaunchParams {
   tokenURI: string;
   payoutRecipient: Address;
   platformReferral?: Address | undefined;
+  /** Backing currency. Defaults to $BLDR on Sepolia, address(0) on mainnet. */
   currency?: Address | undefined;
+  /** Doppler preset: "low" or "high" starting market cap. Default: "low". */
+  marketCapPreset?: "low" | "high" | undefined;
+  /** Custom tick ranges — overrides marketCapPreset if provided. */
+  customPoolConfig?: DopplerPoolPreset | undefined;
   initialPurchaseWei?: bigint | undefined;
 }
 
@@ -146,30 +220,43 @@ export interface CoinLaunchResult {
 // ---------------------------------------------------------------------------
 
 /**
- * Build the calldata for the simple `deploy` overload.
- * Default tick-spacing 0 lets the factory choose.
+ * Build the calldata for the `deploy` overload that takes `bytes poolConfig`.
  */
 export function buildDeployCalldata(params: {
+  chainId: number;
   payoutRecipient: Address;
   name: string;
   symbol: string;
   tokenURI: string;
   platformReferral?: Address | undefined;
   currency?: Address | undefined;
+  marketCapPreset?: "low" | "high" | undefined;
+  customPoolConfig?: DopplerPoolPreset | undefined;
   initialPurchaseWei?: bigint | undefined;
 }): `0x${string}` {
+  const currency = params.currency ?? defaultCurrencyForChain(params.chainId);
+  const preset = params.customPoolConfig
+    ?? (params.marketCapPreset === "high" ? DOPPLER_PRESET_HIGH : DOPPLER_PRESET_LOW);
+
+  const poolConfig = encodeDopplerPoolConfig(
+    currency,
+    preset.tickLower,
+    preset.tickUpper,
+    preset.numDiscoveryPositions,
+    preset.maxDiscoverySupplyShare,
+  );
+
   return encodeFunctionData({
     abi: zoraFactoryAbi,
     functionName: "deploy",
     args: [
       params.payoutRecipient,
-      [] as readonly Address[], // owners – empty for test coins
+      [params.payoutRecipient] as readonly Address[], // at least one owner required
       params.tokenURI,
       params.name,
       params.symbol,
+      poolConfig,
       params.platformReferral ?? ZERO_ADDRESS,
-      params.currency ?? ZERO_ADDRESS, // address(0) = native ETH
-      0, // tickSpacing – 0 = default
       params.initialPurchaseWei ?? 0n,
     ],
   });
