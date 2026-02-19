@@ -122,13 +122,129 @@ export function encodeQuoteExactInputCalldata(params: {
   });
 }
 
+// --- quoteExactInputSingle ABI (for pools with custom hooks like Doppler) ---
+const quoteExactInputSingleAbi = [
+  {
+    name: "quoteExactInputSingle",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          {
+            name: "poolKey",
+            type: "tuple",
+            components: [
+              { name: "currency0", type: "address" },
+              { name: "currency1", type: "address" },
+              { name: "fee", type: "uint24" },
+              { name: "tickSpacing", type: "int24" },
+              { name: "hooks", type: "address" },
+            ],
+          },
+          { name: "zeroForOne", type: "bool" },
+          { name: "exactAmount", type: "uint128" },
+          { name: "hookData", type: "bytes" },
+        ],
+      },
+    ],
+    outputs: [
+      { name: "deltaAmounts", type: "int128[]" },
+      { name: "sqrtPriceX96After", type: "uint160" },
+      { name: "initializedTicksCrossed", type: "uint32" },
+    ],
+  },
+] as const;
+
+/** Parameters for a single-hop quote using the full PoolKey. */
+export interface QuoteSingleParams {
+  chainId: number;
+  client: QuoteClient;
+  poolKey: {
+    currency0: Address;
+    currency1: Address;
+    fee: number;
+    tickSpacing: number;
+    hooks: Address;
+  };
+  zeroForOne: boolean;
+  amountIn: bigint;
+  hookData?: `0x${string}`;
+}
+
+/** Encode calldata for quoteExactInputSingle. Exported for testing. */
+export function encodeQuoteExactInputSingleCalldata(params: {
+  poolKey: QuoteSingleParams["poolKey"];
+  zeroForOne: boolean;
+  amountIn: bigint;
+  hookData?: `0x${string}`;
+}): `0x${string}` {
+  return encodeFunctionData({
+    abi: quoteExactInputSingleAbi,
+    functionName: "quoteExactInputSingle",
+    args: [
+      {
+        poolKey: params.poolKey,
+        zeroForOne: params.zeroForOne,
+        exactAmount: params.amountIn,
+        hookData: params.hookData !== undefined ? params.hookData : "0x",
+      },
+    ],
+  });
+}
+
+// The V4 Quoter's quoteExactInputSingle returns two uint256 values:
+// [0] = amountOut (positive output amount)
+// [1] = gasEstimate
+const singleReturnTypes = [
+  { type: "uint256" as const },
+  { type: "uint256" as const },
+] as const;
+
+/**
+ * Get a quote for a single-hop exact-input swap via eth_call.
+ * Uses quoteExactInputSingle which takes the full PoolKey — required for
+ * pools with custom hooks (e.g. Zora Doppler) where quoteExactInput fails.
+ */
+export async function quoteExactInputSingle(params: QuoteSingleParams): Promise<QuoteResult> {
+  const quoterAddress = getQuoterAddress(params.chainId);
+  const hookData: `0x${string}` = params.hookData ?? "0x";
+  const calldata = encodeQuoteExactInputSingleCalldata({
+    poolKey: params.poolKey,
+    zeroForOne: params.zeroForOne,
+    amountIn: params.amountIn,
+    hookData,
+  });
+
+  const { data } = await params.client.call({
+    to: quoterAddress,
+    data: calldata,
+  });
+
+  if (!data) {
+    throw new Error("V4 Quoter returned empty response");
+  }
+
+  const [amountOut, gasEstimate] =
+    decodeAbiParameters(singleReturnTypes, data);
+
+  return {
+    amountOut,
+    sqrtPriceX96After: [],
+    initializedTicksCrossed: [],
+    gasEstimate,
+  };
+}
+
 const returnTypes = [
   { type: "int128[]" as const },
   { type: "uint160[]" as const },
   { type: "uint32[]" as const },
 ] as const;
 
-/** Get a quote for an exact-input swap via eth_call. */
+/** Get a quote for an exact-input swap via eth_call (multi-hop path format). */
 export async function quoteExactInput(params: QuoteParams): Promise<QuoteResult> {
   const quoterAddress = getQuoterAddress(params.chainId);
   const calldata = encodeQuoteExactInputCalldata({

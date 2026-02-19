@@ -14,6 +14,7 @@ import {
   applySlippage,
   encodeQuoteExactInputCalldata,
   getQuoterAddress,
+  quoteExactInputSingle,
 } from "../src/services/v4Quoter.js";
 import {
   encodeV4ExactInSwap,
@@ -237,26 +238,26 @@ describe.skipIf(!runE2e)("e2e: swap pipeline on Base Sepolia", () => {
           hooks: poolKey.hooks,
         });
 
-        // Try quoting with the real pool params
-        try {
-          const quote = await quoteExactInput({
-            chainId: CHAIN_ID,
-            client,
-            path: [BLDR_TOKEN_SEPOLIA, result.coinAddress],
-            poolParams: [{
-              fee: poolKey.fee,
-              tickSpacing: poolKey.tickSpacing,
-              hooks: poolKey.hooks,
-              hookData: "0x",
-            }],
-            amountIn: 1_000_000_000_000_000n,
-            exactInput: true,
-          });
-          console.log(`Quote with real pool params: amountOut=${quote.amountOut}`);
-          expect(quote.amountOut).toBeGreaterThan(0n);
-        } catch (err) {
-          console.log("Quote with real pool params reverted (Doppler hooks may need special handling):", err);
-        }
+        // Wait for 1+ blocks — Doppler hooks need activation after deploy
+        console.log("Waiting for next block before quoting...");
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+
+        // Quote using quoteExactInputSingle (required for Doppler hook pools)
+        const quote = await quoteExactInputSingle({
+          chainId: CHAIN_ID,
+          client,
+          poolKey: {
+            currency0: poolKey.currency0,
+            currency1: poolKey.currency1,
+            fee: poolKey.fee,
+            tickSpacing: poolKey.tickSpacing,
+            hooks: poolKey.hooks,
+          },
+          zeroForOne: true, // BLDR (currency0) → coin (currency1)
+          amountIn: 1_000_000_000_000_000n, // 0.001 BLDR
+        });
+        console.log(`Quote with real pool params (single): amountOut=${quote.amountOut}`);
+        expect(quote.amountOut).toBeGreaterThan(0n);
       } else {
         console.log("No CoinCreatedV4 event — may have emitted CoinCreated (v3) instead");
       }
