@@ -23,6 +23,13 @@ export interface LaunchWalletClient {
 // Constants
 // ---------------------------------------------------------------------------
 
+/** ZoraFactory addresses per chain (Base mainnet vs Base Sepolia differ). */
+export const ZORA_FACTORY_ADDRESSES: Record<number, Address> = {
+  8453: "0x777777751622c0d3258f214F9DF38E35BF45baF3",
+  84532: "0xaF88840cb637F2684A9E460316b1678AD6245e4a",
+};
+
+/** @deprecated Use ZORA_FACTORY_ADDRESSES[chainId] instead */
 export const ZORA_FACTORY_ADDRESS: Address =
   "0x777777751622c0d3258f214F9DF38E35BF45baF3";
 
@@ -116,6 +123,7 @@ export const zoraFactoryAbi = [
 // ---------------------------------------------------------------------------
 
 export interface CoinLaunchParams {
+  chainId: number;
   client: LaunchPublicClient;
   walletClient: LaunchWalletClient;
   name: string;
@@ -225,8 +233,13 @@ export async function launchCoin(
   const calldata = buildDeployCalldata(params);
   const value = params.initialPurchaseWei ?? 0n;
 
+  const factoryAddress = ZORA_FACTORY_ADDRESSES[params.chainId];
+  if (!factoryAddress) {
+    throw new Error(`No ZoraFactory address for chainId ${params.chainId}`);
+  }
+
   const txHash = await walletClient.sendTransaction({
-    to: ZORA_FACTORY_ADDRESS,
+    to: factoryAddress,
     data: calldata,
     value,
     chain: walletClient.chain,
