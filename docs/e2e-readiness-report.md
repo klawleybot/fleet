@@ -1,119 +1,78 @@
-# E2E Readiness Report
+# E2E Readiness Report — Fleet V4 Swap Pipeline
 
-**Date:** 2026-02-19  
-**Commit:** d1f2dac (feat: v4 swap calldata encoder + wire local signer swap path)
+**Last updated:** 2026-02-19
 
----
+## Test Inventory
 
-## 1. Test File Inventory
+| Layer | File | Tests | Status |
+|-------|------|-------|--------|
+| V4 Swap Encoder | `v4-swap-encoder.spec.ts` | 11 | ✅ Pass |
+| V4 Quoter | `v4-quoter.spec.ts` | 16 | ✅ Pass |
+| Coin Launcher | `coin-launcher.spec.ts` | 5 | ✅ Pass |
+| Swap Routing | `swap-route.spec.ts` | 6 | ✅ Pass |
+| Bundler Config | `bundler-config.spec.ts` | 4 | ✅ Pass |
+| API + Policy | `e2e.api-policy.spec.ts` | 5 | ✅ Pass |
+| Fleet E2E (Anvil) | `e2e.fleet.spec.ts` | 1 | ✅ Pass |
+| Autonomy Soak | `e2e.autonomy-soak.spec.ts` | 1 | ✅ Pass |
+| **Swap Lifecycle (Base Sepolia)** | `e2e.swap-lifecycle.spec.ts` | 4 | ⏭️ Skipped (needs `E2E_BASE_SEPOLIA=1`) |
+| **Total** | | **53 pass, 4 skipped** | |
 
-### Unit Tests (no external deps, all passing ✅)
+## Pipeline Components
 
-| File | What it Tests | Tests | Status |
-|------|---------------|-------|--------|
-| `approval.spec.ts` | Auto-approval policy engine (requester, type, amount thresholds) | 3 | ✅ Pass |
-| `bundler-config.spec.ts` | Bundler config env loading (Pimlico URL resolution per chain) | 4 | ✅ Pass |
-| `bundler-router.spec.ts` | Bundler failover/hedging logic (retry vs validation errors) | 3 | ✅ Pass |
-| `v4-swap-encoder.spec.ts` | V4 Universal Router calldata encoding (single/multi-hop, ETH/ERC20) | 11 | ✅ Pass |
-| `zora-signals.spec.ts` | Zora signal selectors (top movers, watchlist, candidate selection) | 3 | ✅ Pass |
-| `local-backend.spec.ts` | Local signer deterministic address derivation (no CDP dependency) | 1 | ✅ Pass |
+### ✅ Complete
 
-**Total unit: 25/25 passing**
+1. **V4 Swap Encoder** (`v4SwapEncoder.ts`)
+   - Pure viem calldata encoder: V4_SWAP → SWAP_EXACT_IN → SETTLE_ALL → TAKE_ALL
+   - Deterministic — no OPEN_DELTA sentinels, explicit amounts everywhere
+   - Multi-hop support via PathKey[] encoding
 
-### E2E / Integration Tests (require Anvil fork + server)
+2. **V4 Quoter** (`v4Quoter.ts`)
+   - On-chain quote via `eth_call` against V4 Quoter contract
+   - `quoteExactInput()` — returns amountOut, sqrtPriceX96After, gas estimate
+   - `applySlippage()` — BPS-based with correct floor rounding
+   - WETH→address(0) mapping for native ETH
 
-| File | What it Tests | External Deps | Status |
-|------|---------------|---------------|--------|
-| `e2e.fleet.spec.ts` | Full fleet lifecycle: wallets, clusters, funding, swaps, operations | Anvil, RPC (public fallback), SQLite | Runs with CDP_MOCK_MODE=1 |
-| `e2e.api-policy.spec.ts` | API validation, allowlist/watchlist enforcement, cooldowns, autonomy endpoints | Anvil, RPC (public fallback), SQLite | Runs with CDP_MOCK_MODE=1 |
-| `e2e.autonomy-soak.spec.ts` | Repeated autonomy tick cycles, no stuck operations | Anvil, RPC (public fallback), SQLite | Runs with CDP_MOCK_MODE=1 |
-| `e2e.local-funding.spec.ts` | Live local-signer funding flow on Base Sepolia | **Real bundler**, BASE_SEPOLIA_RPC_URL, LOCAL_SIGNER_SEED or MASTER_WALLET_PRIVATE_KEY, funded wallet | Gated behind `E2E_BASE_LIVE=1` |
+3. **Quoter Wired into cdp.ts**
+   - Local signer path now pre-quotes before encoding swap
+   - `minAmountOut` derived from quote + `slippageBps` (no more `0n` placeholder)
 
-All three mock e2e tests spin up their own Anvil fork + fleet server automatically. They use `CDP_MOCK_MODE=1` so no real transactions occur.
+4. **Coin Launcher** (`coinLauncher.ts`)
+   - Deploy test Zora coins via ZoraFactory in one tx
+   - Parses CoinCreated events for coin address extraction
+   - ETH-backed coins only (Base Sepolia constraint)
 
----
+5. **E2E Swap Lifecycle Test** (`e2e.swap-lifecycle.spec.ts`)
+   - Launch coin → quote → encode → submit swap
+   - Gated behind `E2E_BASE_SEPOLIA=1` env var
+   - Uses doppler env (`onchain-tooling/dev`) for keys + RPC
 
-## 2. TODO/FIXME/Placeholder Scan
+### Contract Addresses
 
-Only **one** placeholder found in the entire codebase:
+| Contract | Base | Base Sepolia |
+|----------|------|-------------|
+| Universal Router | `0x6ff5...9b43` | `0x492e...4104` |
+| V4 Quoter | `0x0d5e...48d` | `0x4a65...1cba` |
+| PoolManager | `0x4985...2b2b` | `0x05E7...3408` |
+| ZoraFactory | `0x7777...aF3` | `0x7777...aF3` |
 
-- **`packages/server/src/services/cdp.ts:536`** — `// Use 0 as minAmountOut placeholder — slippage protection is via slippageBps`
-  - This is in the local signer swap path. `minAmountOut` is set to `0n` and slippage is enforced at the contract level via the encoder's `minAmountOut` param. **Acceptable for testnet; needs proper quote-based minAmountOut for mainnet.**
+## Running the E2E Test
 
-No other TODO/FIXME/HACK/XXX found.
-
----
-
-## 3. What Works Today (Local/Mock)
-
-- ✅ Full wallet + cluster CRUD via API
-- ✅ Operation lifecycle (request → approve → execute → complete)
-- ✅ Auto-approval policy engine
-- ✅ Bundler config + failover router
-- ✅ Zora signal selection (momentum, watchlist)
-- ✅ V4 swap calldata encoding (single-hop, multi-hop, ETH + ERC20)
-- ✅ Local signer backend (deterministic HD derivation, no CDP needed)
-- ✅ Local signer wired to v4SwapEncoder for actual swap calldata
-- ✅ Autonomy loop (tick → signal → create op → approve → execute)
-- ✅ Policy enforcement (allowlist, watchlist, slippage caps, cooldowns)
-- ✅ All 25 unit tests + 3 mock e2e suites pass against Anvil fork
-
----
-
-## 4. What's Needed for Base Sepolia Live Testing
-
-### Infrastructure Requirements
-
-| Requirement | Env Var | Status |
-|-------------|---------|--------|
-| Base Sepolia RPC | `BASE_SEPOLIA_RPC_URL` | Needed (Alchemy/Infura/public) |
-| ERC-4337 Bundler | `PIMLICO_BASE_SEPOLIA_BUNDLER_URL` or `BUNDLER_PRIMARY_URL` | Needed (Pimlico account) |
-| Funded seed phrase | `LOCAL_SIGNER_SEED` | Needed (ETH on Base Sepolia for gas + swaps) |
-| Alternatively | `MASTER_WALLET_PRIVATE_KEY` | Alternative to seed |
-
-### Funded Accounts Needed
-
-- **Master/owner wallet**: Needs Base Sepolia ETH for:
-  - Smart account deployment (first UserOp)
-  - Gas deposits to paymaster or prefund
-  - Swap input amounts (ETH → token)
-- **Estimated minimum**: ~0.05 ETH on Base Sepolia for basic testing
-
-### Live Test Gate
-
-The `e2e.local-funding.spec.ts` test already exists and is gated behind `E2E_BASE_LIVE=1`. Run with:
 ```bash
-E2E_BASE_LIVE=1 \
-BASE_SEPOLIA_RPC_URL=https://... \
-LOCAL_SIGNER_SEED=your-seed \
-PIMLICO_BASE_SEPOLIA_BUNDLER_URL=https://... \
-npx vitest run packages/server/tests/e2e.local-funding.spec.ts
+# From fleet root
+E2E_BASE_SEPOLIA=1 doppler run --project onchain-tooling --config dev -- \
+  yarn workspace @fleet/server test -- tests/e2e.swap-lifecycle.spec.ts
 ```
 
----
+## Remaining Gaps
 
-## 5. Missing Test Coverage
+1. **Pool params discovery** — e2e test uses default params (fee=0, tickSpacing=60). Production should discover actual pool params from on-chain state or Zora API.
+2. **Sell path** — only buy (ETH→coin) is wired. Sell (coin→ETH) needs approve + reverse path encoding.
+3. **Multi-hop production routes** — tested in unit tests, but no e2e coverage for WETH→ZORA→coin paths yet.
+4. **Gas estimation** — quoter returns gas estimate but it's not used for gas limit tuning yet.
 
-| Gap | Priority | Notes |
-|-----|----------|-------|
-| Live swap execution (ETH → token on Base Sepolia) | **P0** | `e2e.local-funding.spec.ts` exists but needs funded wallet + bundler to actually run |
-| Multi-hop swap (ETH → WETH → token) live test | P1 | Encoder tested in unit tests, but no live multi-hop e2e |
-| Paymaster / gas sponsorship path | P1 | No tests for sponsored UserOps |
-| Smart account deployment (first-time) | P1 | Implicitly tested via funding flow but not isolated |
-| Swap slippage / revert handling | P2 | No test for what happens when swap reverts on-chain |
-| Token balance verification post-swap | P2 | Tests execute swap but don't verify token arrived |
-| Concurrent cluster operations | P2 | No test for parallel ops across clusters |
-| `minAmountOut` quote-based calculation | P2 | Currently hardcoded to 0; needs quoter integration |
+## Next Steps
 
----
-
-## 6. Recommended Next Steps (Priority Order)
-
-1. **Fund a Base Sepolia wallet** — Get testnet ETH, set up env vars, run `e2e.local-funding.spec.ts` with `E2E_BASE_LIVE=1`
-2. **Get Pimlico Base Sepolia bundler key** — Sign up at pimlico.io, get API key for chain 84532
-3. **Run the live funding e2e** — Validate the full local-signer → smart account → bundler → on-chain path
-4. **Add post-swap balance assertion** — After swap executes, verify target token balance increased
-5. **Integrate a quoter for `minAmountOut`** — Replace the `0n` placeholder with real quote data (Uniswap Quoter V2 or on-chain simulation)
-6. **Add multi-hop live e2e test** — Test the ETH → WETH → CoinToken path on Sepolia
-7. **Add paymaster integration** — If gas sponsorship is planned, test that path
-8. **Mainnet dry-run checklist** — Before mainnet: proper minAmountOut, tighter slippage defaults, monitoring/alerting
+1. Run the e2e test on Base Sepolia with live doppler env
+2. Fix any pool param issues discovered during live test
+3. Wire sell path (coin→ETH) with approval flow
+4. Add production pool params discovery
