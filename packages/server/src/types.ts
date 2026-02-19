@@ -52,3 +52,37 @@ export interface SwapRequestBody {
   slippageBps: number;
 }
 
+export type StrategyMode = "sync" | "staggered" | "momentum";
+
+export interface ClusterRecord {
+  id: number;
+  name: string;
+  strategyMode: StrategyMode;
+  createdAt: string;
+}
+
+export interface ClusterWalletRecord {
+  clusterId: number;
+  walletId: number;
+  enabled: boolean;
+  weight: number;
+  addedAt: string;
+}
+
+export type OperationType = "FUNDING_REQUEST" | "SUPPORT_COIN" | "EXIT_COIN";
+export type OperationStatus = "pending" | "approved" | "executing" | "complete" | "failed";
+
+export interface OperationRecord {
+  id: number;
+  type: OperationType;
+  clusterId: number;
+  status: OperationStatus;
+  requestedBy: string | null;
+  approvedBy: string | null;
+  payloadJson: string;
+  resultJson: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+

@@ -1,10 +1,12 @@
 import { Router } from "express";
 import { isAddress } from "viem";
 import { createFleetWallets, ensureMasterWallet, getWalletEthBalance, listWallets } from "../services/wallet.js";
+import { bootstrapFleetFunding, getWalletBootstrapWei } from "../services/funding.js";
 import { getErc20Balance } from "../services/balance.js";
 
 interface CreateWalletsBody {
   count?: number;
+  bootstrapAmountWei?: string;
 }
 
 interface TokenBalanceQuery {
@@ -23,8 +25,36 @@ walletsRouter.post("/", async (req, res) => {
     });
   }
 
+  let bootstrapWei = getWalletBootstrapWei();
+  if (body.bootstrapAmountWei !== undefined) {
+    try {
+      bootstrapWei = BigInt(body.bootstrapAmountWei);
+    } catch {
+      return res.status(400).json({ error: "bootstrapAmountWei must be a valid integer string" });
+    }
+    if (bootstrapWei < 0n) {
+      return res.status(400).json({ error: "bootstrapAmountWei must be >= 0" });
+    }
+  }
+
   try {
     const created = await createFleetWallets(count);
+    if (bootstrapWei > 0n && created.length > 0) {
+      try {
+        const bootstrapRecords = await bootstrapFleetFunding({
+          walletIds: created.map((wallet) => wallet.id),
+          amountWei: bootstrapWei,
+        });
+        return res.status(201).json({ created, bootstrapRecords, bootstrapAmountWei: bootstrapWei.toString() });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Bootstrap funding failed";
+        return res.status(500).json({
+          error: message,
+          created,
+          bootstrapAmountWei: bootstrapWei.toString(),
+        });
+      }
+    }
     return res.status(201).json({ created });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected error";

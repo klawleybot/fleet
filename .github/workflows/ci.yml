@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        app_network: [base, base-sepolia]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install deps
+        run: corepack yarn install --frozen-lockfile
+
+      - name: Install Foundry (forge/anvil)
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Typecheck server
+        run: corepack yarn workspace @pump-it-up/server typecheck
+
+      - name: E2E tests (${{ matrix.app_network }})
+        env:
+          APP_NETWORK: ${{ matrix.app_network }}
+          BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}
+          BASE_SEPOLIA_RPC_URL: ${{ secrets.BASE_SEPOLIA_RPC_URL }}
+        run: |
+          if [ -z "$BASE_RPC_URL" ]; then
+            export BASE_RPC_URL="https://mainnet.base.org"
+          fi
+          if [ -z "$BASE_SEPOLIA_RPC_URL" ]; then
+            export BASE_SEPOLIA_RPC_URL="https://sepolia.base.org"
+          fi
+          corepack yarn workspace @pump-it-up/server test:e2e

@@ -10,7 +10,12 @@
     "dev": "yarn workspace @pump-it-up/server dev",
     "dev:server": "yarn workspace @pump-it-up/server dev",
     "dev:web": "yarn workspace @pump-it-up/web dev",
-    "build": "yarn workspaces foreach -pt run build",
-    "typecheck": "yarn workspaces foreach -pt run typecheck"
+    "build": "yarn workspaces run build",
+    "typecheck": "yarn workspaces run typecheck",
+    "test:e2e": "yarn workspace @pump-it-up/server test:e2e",
+    "test:e2e:base": "APP_NETWORK=base yarn test:e2e",
+    "test:e2e:base-sepolia": "APP_NETWORK=base-sepolia yarn test:e2e",
+    "test:e2e:doppler": "doppler run --project onchain-tooling --config dev -- yarn test:e2e:base && doppler run --project onchain-tooling --config dev -- yarn test:e2e:base-sepolia",
+    "ci": "yarn workspace @pump-it-up/server typecheck && yarn test:e2e:base && yarn test:e2e:base-sepolia"
   }
 }

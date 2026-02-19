@@ -1,13 +1,11 @@
 import { createPublicClient, erc20Abi, http } from "viem";
-import { base } from "viem/chains";
+import { getChainConfig } from "./network.js";
 
-const transport = process.env.BASE_RPC_URL
-  ? http(process.env.BASE_RPC_URL)
-  : http();
+const chainCfg = getChainConfig();
 
 const publicClient = createPublicClient({
-  chain: base,
-  transport,
+  chain: chainCfg.chain,
+  transport: http(chainCfg.rpcUrl),
 });
 
 export async function getEthBalance(address: `0x${string}`): Promise<bigint> {

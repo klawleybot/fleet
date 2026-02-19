@@ -3,8 +3,14 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { runMigrations } from "./schema.js";
 import type {
+  ClusterRecord,
+  ClusterWalletRecord,
   FundingRecord,
   FundingStatus,
+  OperationRecord,
+  OperationStatus,
+  OperationType,
+  StrategyMode,
   TradeRecord,
   TradeStatus,
   WalletRecord,
@@ -46,6 +52,35 @@ interface FundingRow {
   created_at: string;
 }
 
+interface ClusterRow {
+  id: number;
+  name: string;
+  strategy_mode: StrategyMode;
+  created_at: string;
+}
+
+interface ClusterWalletRow {
+  cluster_id: number;
+  wallet_id: number;
+  enabled: number;
+  weight: number;
+  added_at: string;
+}
+
+interface OperationRow {
+  id: number;
+  type: OperationType;
+  cluster_id: number;
+  status: OperationStatus;
+  requested_by: string | null;
+  approved_by: string | null;
+  payload_json: string;
+  result_json: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 function mapWallet(row: WalletRow): WalletRecord {
   return {
     id: row.id,
@@ -85,6 +120,41 @@ function mapFunding(row: FundingRow): FundingRecord {
     status: row.status,
     errorMessage: row.error_message,
     createdAt: row.created_at,
+  };
+}
+
+function mapCluster(row: ClusterRow): ClusterRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    strategyMode: row.strategy_mode,
+    createdAt: row.created_at,
+  };
+}
+
+function mapClusterWallet(row: ClusterWalletRow): ClusterWalletRecord {
+  return {
+    clusterId: row.cluster_id,
+    walletId: row.wallet_id,
+    enabled: row.enabled === 1,
+    weight: row.weight,
+    addedAt: row.added_at,
+  };
+}
+
+function mapOperation(row: OperationRow): OperationRecord {
+  return {
+    id: row.id,
+    type: row.type,
+    clusterId: row.cluster_id,
+    status: row.status,
+    requestedBy: row.requested_by,
+    approvedBy: row.approved_by,
+    payloadJson: row.payload_json,
+    resultJson: row.result_json,
+    errorMessage: row.error_message,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -226,6 +296,182 @@ export const db = {
       .prepare("SELECT * FROM funding_txs ORDER BY id DESC")
       .all() as FundingRow[];
     return rows.map(mapFunding);
+  },
+
+  createCluster(input: { name: string; strategyMode: StrategyMode }): ClusterRecord {
+    const result = sqlite
+      .prepare(`INSERT INTO clusters (name, strategy_mode) VALUES (@name, @strategy_mode)`)
+      .run({ name: input.name, strategy_mode: input.strategyMode });
+    const row = sqlite.prepare("SELECT * FROM clusters WHERE id = ?").get(result.lastInsertRowid) as ClusterRow;
+    return mapCluster(row);
+  },
+
+  getClusterById(id: number): ClusterRecord | null {
+    const row = sqlite.prepare("SELECT * FROM clusters WHERE id = ?").get(id) as ClusterRow | undefined;
+    return row ? mapCluster(row) : null;
+  },
+
+  getClusterByName(name: string): ClusterRecord | null {
+    const row = sqlite.prepare("SELECT * FROM clusters WHERE name = ?").get(name) as ClusterRow | undefined;
+    return row ? mapCluster(row) : null;
+  },
+
+  listClusters(): ClusterRecord[] {
+    const rows = sqlite.prepare("SELECT * FROM clusters ORDER BY id ASC").all() as ClusterRow[];
+    return rows.map(mapCluster);
+  },
+
+  setClusterWallets(clusterId: number, walletIds: number[]): ClusterWalletRecord[] {
+    const uniqueWalletIds = [...new Set(walletIds)];
+    const tx = sqlite.transaction((ids: number[]) => {
+      sqlite.prepare("DELETE FROM cluster_wallets WHERE cluster_id = ?").run(clusterId);
+      const insert = sqlite.prepare(`
+        INSERT INTO cluster_wallets (cluster_id, wallet_id, enabled, weight)
+        VALUES (?, ?, 1, 1)
+      `);
+      for (const walletId of ids) {
+        insert.run(clusterId, walletId);
+      }
+    });
+    tx(uniqueWalletIds);
+
+    const rows = sqlite
+      .prepare("SELECT * FROM cluster_wallets WHERE cluster_id = ? ORDER BY wallet_id ASC")
+      .all(clusterId) as ClusterWalletRow[];
+    return rows.map(mapClusterWallet);
+  },
+
+  listClusterWallets(clusterId: number): ClusterWalletRecord[] {
+    const rows = sqlite
+      .prepare("SELECT * FROM cluster_wallets WHERE cluster_id = ? ORDER BY wallet_id ASC")
+      .all(clusterId) as ClusterWalletRow[];
+    return rows.map(mapClusterWallet);
+  },
+
+  listClusterWalletDetails(clusterId: number): WalletRecord[] {
+    const rows = sqlite
+      .prepare(`
+        SELECT w.*
+        FROM cluster_wallets cw
+        JOIN wallets w ON w.id = cw.wallet_id
+        WHERE cw.cluster_id = ? AND cw.enabled = 1
+        ORDER BY w.id ASC
+      `)
+      .all(clusterId) as WalletRow[];
+    return rows.map(mapWallet);
+  },
+
+  createOperation(input: {
+    type: OperationType;
+    clusterId: number;
+    status?: OperationStatus;
+    requestedBy?: string | null;
+    approvedBy?: string | null;
+    payloadJson: string;
+    resultJson?: string | null;
+    errorMessage?: string | null;
+  }): OperationRecord {
+    const result = sqlite
+      .prepare(`
+        INSERT INTO operations (type, cluster_id, status, requested_by, approved_by, payload_json, result_json, error_message, updated_at)
+        VALUES (@type, @cluster_id, @status, @requested_by, @approved_by, @payload_json, @result_json, @error_message, CURRENT_TIMESTAMP)
+      `)
+      .run({
+        type: input.type,
+        cluster_id: input.clusterId,
+        status: input.status ?? "pending",
+        requested_by: input.requestedBy ?? null,
+        approved_by: input.approvedBy ?? null,
+        payload_json: input.payloadJson,
+        result_json: input.resultJson ?? null,
+        error_message: input.errorMessage ?? null,
+      });
+
+    const row = sqlite.prepare("SELECT * FROM operations WHERE id = ?").get(result.lastInsertRowid) as OperationRow;
+    return mapOperation(row);
+  },
+
+  getOperationById(id: number): OperationRecord | null {
+    const row = sqlite.prepare("SELECT * FROM operations WHERE id = ?").get(id) as OperationRow | undefined;
+    return row ? mapOperation(row) : null;
+  },
+
+  updateOperation(input: {
+    id: number;
+    status?: OperationStatus;
+    approvedBy?: string | null;
+    payloadJson?: string;
+    resultJson?: string | null;
+    errorMessage?: string | null;
+  }): OperationRecord {
+    const current = sqlite.prepare("SELECT * FROM operations WHERE id = ?").get(input.id) as OperationRow | undefined;
+    if (!current) throw new Error(`Operation ${input.id} not found`);
+
+    sqlite
+      .prepare(`
+        UPDATE operations
+        SET status = @status,
+            approved_by = @approved_by,
+            payload_json = @payload_json,
+            result_json = @result_json,
+            error_message = @error_message,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = @id
+      `)
+      .run({
+        id: input.id,
+        status: input.status ?? current.status,
+        approved_by: input.approvedBy ?? current.approved_by,
+        payload_json: input.payloadJson ?? current.payload_json,
+        result_json: input.resultJson ?? current.result_json,
+        error_message: input.errorMessage ?? current.error_message,
+      });
+
+    const row = sqlite.prepare("SELECT * FROM operations WHERE id = ?").get(input.id) as OperationRow;
+    return mapOperation(row);
+  },
+
+  hasOpenOperationForCluster(clusterId: number): boolean {
+    const row = sqlite
+      .prepare(`
+        SELECT 1 AS ok
+        FROM operations
+        WHERE cluster_id = ?
+          AND status IN ('pending', 'approved', 'executing')
+        LIMIT 1
+      `)
+      .get(clusterId) as { ok: number } | undefined;
+    return Boolean(row?.ok);
+  },
+
+  listOperationsByStatus(status: OperationStatus, limit = 100): OperationRecord[] {
+    const rows = sqlite
+      .prepare("SELECT * FROM operations WHERE status = ? ORDER BY id ASC LIMIT ?")
+      .all(status, limit) as OperationRow[];
+    return rows.map(mapOperation);
+  },
+
+  getLatestClusterOperationAgeSec(clusterId: number, excludeOperationId?: number): number | null {
+    const row = sqlite
+      .prepare(`
+        SELECT CAST((strftime('%s','now') - strftime('%s', updated_at)) AS INTEGER) AS age_sec
+        FROM operations
+        WHERE cluster_id = ?
+          AND (? IS NULL OR id <> ?)
+        ORDER BY id DESC
+        LIMIT 1
+      `)
+      .get(clusterId, excludeOperationId ?? null, excludeOperationId ?? null) as { age_sec: number } | undefined;
+
+    if (!row || row.age_sec === null || row.age_sec === undefined) return null;
+    return Number(row.age_sec);
+  },
+
+  listOperations(limit = 100): OperationRecord[] {
+    const rows = sqlite
+      .prepare("SELECT * FROM operations ORDER BY id DESC LIMIT ?")
+      .all(limit) as OperationRow[];
+    return rows.map(mapOperation);
   },
 };
 
