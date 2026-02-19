@@ -46,9 +46,17 @@ function getParentMap(): Map<`0x${string}`, `0x${string}`> {
   return map;
 }
 
+export interface HopPoolParams {
+  fee: number;
+  tickSpacing: number;
+  hooks: `0x${string}`;
+  hookData: `0x${string}`;
+}
+
 export interface DeterministicRoute {
   path: `0x${string}`[];
   hops: number;
+  poolParams?: HopPoolParams[];
 }
 
 /**
