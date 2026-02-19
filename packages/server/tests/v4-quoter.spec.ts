@@ -6,6 +6,7 @@ import {
   quoteExactInput,
   getQuoterAddress,
   V4_QUOTER_ADDRESSES,
+  type QuoteClient,
 } from "../src/services/v4Quoter.js";
 
 const WETH = "0x4200000000000000000000000000000000000006" as const;
@@ -174,7 +175,7 @@ describe("v4Quoter", () => {
 
       const mockClient = {
         call: vi.fn().mockResolvedValue({ data: mockReturnData }),
-      } as any;
+      } satisfies QuoteClient;
 
       const result = await quoteExactInput({
         chainId: 8453,
@@ -199,7 +200,7 @@ describe("v4Quoter", () => {
     it("throws on empty response", async () => {
       const mockClient = {
         call: vi.fn().mockResolvedValue({ data: undefined }),
-      } as any;
+      } satisfies QuoteClient;
 
       await expect(
         quoteExactInput({

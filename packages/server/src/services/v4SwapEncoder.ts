@@ -113,7 +113,7 @@ export function encodeV4ExactInSwap(params: EncodeV4ExactInSwapParams): EncodedS
 
   // Encode SWAP_EXACT_IN params
   const swapExactInEncoded = encodeAbiParameters(
-    [exactInputParamsType as any],
+    [exactInputParamsType],
     [
       {
         currencyIn,

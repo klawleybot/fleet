@@ -42,8 +42,14 @@ function getSignerBackend(): SignerBackend {
   return "local";
 }
 
-function resolveCdpNetwork(network?: SupportedNetwork) {
-  return (network ?? chainCfg.cdpNetwork) as any;
+/**
+ * Resolve the CDP SDK network identifier. The CDP SDK uses inconsistent network
+ * union types across methods (EvmUserOperationNetwork includes "base-sepolia",
+ * SmartAccountSwapNetwork does not). The generic parameter lets each call site
+ * assert the expected type without `as any`.
+ */
+function resolveCdpNetwork<T extends string = SupportedNetwork>(network?: SupportedNetwork): T {
+  return (network ?? chainCfg.cdpNetwork) as T;
 }
 
 let cdpClient: CdpClient | null = null;
@@ -542,7 +548,7 @@ export async function swapFromSmartAccount(input: {
     });
     const quote = await quoteExactInput({
       chainId: chainCfg.chainId,
-      client: publicClient as any,
+      client: publicClient,
       path: route.path,
       poolParams: route.poolParams ?? [],
       amountIn: input.fromAmount,

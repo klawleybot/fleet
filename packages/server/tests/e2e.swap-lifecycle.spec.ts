@@ -67,8 +67,8 @@ describe.skipIf(!runE2e)("e2e: swap lifecycle on Base Sepolia", () => {
       const symbol = `E2E${rand}`;
 
       const result = await launchCoin({
-        client: client as any,
-        walletClient: walletClient as any,
+        client: client,
+        walletClient: walletClient,
         name,
         symbol,
         tokenURI: `https://test.example.com/${rand}`,
@@ -120,7 +120,7 @@ describe.skipIf(!runE2e)("e2e: swap lifecycle on Base Sepolia", () => {
 
       const quote = await quoteExactInput({
         chainId: CHAIN_ID,
-        client: client as any,
+        client: client,
         path: [NATIVE_ETH, coinAddress],
         poolParams: hopPoolParams,
         amountIn,
@@ -180,8 +180,8 @@ describe.skipIf(!runE2e)("e2e: swap lifecycle on Base Sepolia", () => {
       // Launch a fresh coin
       const rand = Math.random().toString(36).slice(2, 8).toUpperCase();
       const { coinAddress: freshCoin, txHash: launchTx } = await launchCoin({
-        client: client as any,
-        walletClient: walletClient as any,
+        client: client,
+        walletClient: walletClient,
         name: `Lifecycle ${rand}`,
         symbol: `LC${rand}`,
         tokenURI: `https://test.example.com/lifecycle-${rand}`,
@@ -202,7 +202,7 @@ describe.skipIf(!runE2e)("e2e: swap lifecycle on Base Sepolia", () => {
 
       const quote = await quoteExactInput({
         chainId: CHAIN_ID,
-        client: client as any,
+        client: client,
         path: [NATIVE_ETH, freshCoin],
         poolParams: freshHopParams,
         amountIn,
@@ -238,7 +238,7 @@ describe.skipIf(!runE2e)("e2e: swap lifecycle on Base Sepolia", () => {
       });
       console.log(`Swap tx submitted: ${swapTxHash}`);
 
-      const receipt = await (client as any).waitForTransactionReceipt({
+      const receipt = await client.waitForTransactionReceipt({
         hash: swapTxHash,
         timeout: 60_000,
       });

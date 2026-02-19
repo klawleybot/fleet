@@ -1,11 +1,23 @@
 import {
   type Address,
-  type PublicClient,
-  type WalletClient,
+  type Chain,
+  type Log,
   parseEventLogs,
   encodeFunctionData,
   zeroAddress,
 } from "viem";
+
+/** Minimal client interface — only needs waitForTransactionReceipt. */
+export interface LaunchPublicClient {
+  waitForTransactionReceipt(args: { hash: `0x${string}` }): Promise<{ logs: Log[]; status: "success" | "reverted" }>;
+}
+
+/** Minimal wallet client — needs sendTransaction, account, and chain. */
+export interface LaunchWalletClient {
+  account?: { address: Address } | undefined;
+  chain?: Chain | undefined;
+  sendTransaction(args: { chain: Chain | undefined; to: Address; data: `0x${string}`; value: bigint; account: { address: Address } }): Promise<`0x${string}`>;
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -104,8 +116,8 @@ export const zoraFactoryAbi = [
 // ---------------------------------------------------------------------------
 
 export interface CoinLaunchParams {
-  client: PublicClient;
-  walletClient: WalletClient;
+  client: LaunchPublicClient;
+  walletClient: LaunchWalletClient;
   name: string;
   symbol: string;
   tokenURI: string;
@@ -159,7 +171,7 @@ export function buildDeployCalldata(params: {
  * Parse CoinCreated / CoinCreatedV4 from a transaction receipt and extract
  * the new coin address (and pool address when available).
  */
-export function parseCoinCreatedLogs(logs: readonly { address: Address; topics: readonly `0x${string}`[]; data: `0x${string}` }[]): {
+export function parseCoinCreatedLogs(logs: Log[]): {
   coinAddress: Address;
   poolAddress?: Address | undefined;
 } {
@@ -167,7 +179,7 @@ export function parseCoinCreatedLogs(logs: readonly { address: Address; topics: 
   const v4Events = parseEventLogs({
     abi: zoraFactoryAbi,
     eventName: "CoinCreatedV4",
-    logs: logs as any, // viem's overloaded types
+    logs,
   });
   if (v4Events.length > 0) {
     const ev = v4Events[0]!;
@@ -181,7 +193,7 @@ export function parseCoinCreatedLogs(logs: readonly { address: Address; topics: 
   const v3Events = parseEventLogs({
     abi: zoraFactoryAbi,
     eventName: "CoinCreated",
-    logs: logs as any,
+    logs,
   });
   if (v3Events.length > 0) {
     const ev = v3Events[0]!;

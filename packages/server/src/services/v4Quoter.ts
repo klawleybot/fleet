@@ -1,5 +1,10 @@
-import { encodeAbiParameters, decodeAbiParameters, encodeFunctionData, type Address, type PublicClient } from "viem";
+import { encodeAbiParameters, decodeAbiParameters, encodeFunctionData, type Address } from "viem";
 import type { HopPoolParams } from "./swapRoute.js";
+
+/** Minimal client interface — only needs `call()` for eth_call quotes. */
+export interface QuoteClient {
+  call(args: { to: Address; data: `0x${string}` }): Promise<{ data?: `0x${string}` | undefined }>;
+}
 
 // --- Quoter addresses per chain ---
 export const V4_QUOTER_ADDRESSES: Record<number, Address> = {
@@ -59,7 +64,7 @@ const quoteExactInputAbi = [
 // --- Interfaces ---
 export interface QuoteParams {
   chainId: number;
-  client: PublicClient;
+  client: QuoteClient;
   path: Address[];
   poolParams: HopPoolParams[];
   amountIn: bigint;
