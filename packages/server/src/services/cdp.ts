@@ -22,6 +22,7 @@ import { loadBundlerConfigFromEnv } from "./bundler/config.js";
 import { getBundlerRouter } from "./bundler/index.js";
 import { resolveDeterministicBuyRoute } from "./swapRoute.js";
 import { encodeV4ExactInSwap } from "./v4SwapEncoder.js";
+import { quoteExactInput, applySlippage } from "./v4Quoter.js";
 
 const OWNER_ACCOUNT_NAME = "fleet-owner";
 const MASTER_SMART_ACCOUNT_NAME = "master";
@@ -533,9 +534,21 @@ export async function swapFromSmartAccount(input: {
         : addr,
     );
 
-    // Use 0 as minAmountOut placeholder — slippage protection is via slippageBps
-    // In production, this should be computed from a price quote
-    const minAmountOut = 0n;
+    // Pre-quote to compute minAmountOut with slippage protection
+    const slippageBps = input.slippageBps;
+    const publicClient = createPublicClient({
+      chain: chainCfg.chain,
+      transport: http(chainCfg.rpcUrl),
+    });
+    const quote = await quoteExactInput({
+      chainId: chainCfg.chainId,
+      client: publicClient as any,
+      path: route.path,
+      poolParams: route.poolParams ?? [],
+      amountIn: input.fromAmount,
+      exactInput: true,
+    });
+    const minAmountOut = applySlippage(quote.amountOut, slippageBps);
 
     const encoded = encodeV4ExactInSwap({
       chainId: chainCfg.chainId,
