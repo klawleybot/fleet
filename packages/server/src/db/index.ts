@@ -10,6 +10,7 @@ import type {
   OperationRecord,
   OperationStatus,
   OperationType,
+  PositionRecord,
   StrategyMode,
   TradeRecord,
   TradeStatus,
@@ -33,11 +34,26 @@ interface TradeRow {
   from_token: string;
   to_token: string;
   amount_in: string;
+  amount_out: string | null;
+  operation_id: number | null;
   user_op_hash: string | null;
   tx_hash: string | null;
   status: TradeStatus;
   error_message: string | null;
   created_at: string;
+}
+
+interface PositionRow {
+  id: number;
+  wallet_id: number;
+  coin_address: string;
+  total_cost_wei: string;
+  total_received_wei: string;
+  holdings_raw: string;
+  realized_pnl_wei: string;
+  buy_count: number;
+  sell_count: number;
+  last_action_at: string;
 }
 
 interface FundingRow {
@@ -101,11 +117,28 @@ function mapTrade(row: TradeRow): TradeRecord {
     fromToken: row.from_token as `0x${string}`,
     toToken: row.to_token as `0x${string}`,
     amountIn: row.amount_in,
+    amountOut: row.amount_out ?? null,
+    operationId: row.operation_id ?? null,
     userOpHash: row.user_op_hash as `0x${string}` | null,
     txHash: row.tx_hash as `0x${string}` | null,
     status: row.status,
     errorMessage: row.error_message,
     createdAt: row.created_at,
+  };
+}
+
+function mapPosition(row: PositionRow): PositionRecord {
+  return {
+    id: row.id,
+    walletId: row.wallet_id,
+    coinAddress: row.coin_address as `0x${string}`,
+    totalCostWei: row.total_cost_wei,
+    totalReceivedWei: row.total_received_wei,
+    holdingsRaw: row.holdings_raw,
+    realizedPnlWei: row.realized_pnl_wei,
+    buyCount: row.buy_count,
+    sellCount: row.sell_count,
+    lastActionAt: row.last_action_at,
   };
 }
 
@@ -227,6 +260,8 @@ export const db = {
     fromToken: `0x${string}`;
     toToken: `0x${string}`;
     amountIn: string;
+    amountOut?: string | null;
+    operationId?: number | null;
     userOpHash: `0x${string}` | null;
     txHash: `0x${string}` | null;
     status: TradeStatus;
@@ -234,14 +269,16 @@ export const db = {
   }): TradeRecord {
     const result = sqlite
       .prepare(
-        `INSERT INTO trades (wallet_id, from_token, to_token, amount_in, user_op_hash, tx_hash, status, error_message)
-         VALUES (@wallet_id, @from_token, @to_token, @amount_in, @user_op_hash, @tx_hash, @status, @error_message)`,
+        `INSERT INTO trades (wallet_id, from_token, to_token, amount_in, amount_out, operation_id, user_op_hash, tx_hash, status, error_message)
+         VALUES (@wallet_id, @from_token, @to_token, @amount_in, @amount_out, @operation_id, @user_op_hash, @tx_hash, @status, @error_message)`,
       )
       .run({
         wallet_id: input.walletId,
         from_token: input.fromToken,
         to_token: input.toToken,
         amount_in: input.amountIn,
+        amount_out: input.amountOut ?? null,
+        operation_id: input.operationId ?? null,
         user_op_hash: input.userOpHash,
         tx_hash: input.txHash,
         status: input.status,
@@ -252,6 +289,12 @@ export const db = {
       .prepare("SELECT * FROM trades WHERE id = ?")
       .get(result.lastInsertRowid) as TradeRow;
     return mapTrade(row);
+  },
+
+  updateTradeAmountOut(tradeId: number, amountOut: string): void {
+    sqlite
+      .prepare("UPDATE trades SET amount_out = ? WHERE id = ?")
+      .run(amountOut, tradeId);
   },
 
   listTrades(): TradeRecord[] {
@@ -472,6 +515,101 @@ export const db = {
       .prepare("SELECT * FROM operations ORDER BY id DESC LIMIT ?")
       .all(limit) as OperationRow[];
     return rows.map(mapOperation);
+  },
+
+  // --- Positions ---
+
+  upsertPosition(input: {
+    walletId: number;
+    coinAddress: `0x${string}`;
+    costDelta: string;
+    receivedDelta: string;
+    holdingsDelta: string;
+    isBuy: boolean;
+  }): PositionRecord {
+    const coin = input.coinAddress.toLowerCase();
+    const existing = sqlite
+      .prepare("SELECT * FROM positions WHERE wallet_id = ? AND coin_address = ?")
+      .get(input.walletId, coin) as PositionRow | undefined;
+
+    if (!existing) {
+      sqlite
+        .prepare(`
+          INSERT INTO positions (wallet_id, coin_address, total_cost_wei, total_received_wei, holdings_raw, realized_pnl_wei, buy_count, sell_count, last_action_at)
+          VALUES (?, ?, ?, ?, ?, '0', ?, ?, CURRENT_TIMESTAMP)
+        `)
+        .run(
+          input.walletId,
+          coin,
+          input.costDelta,
+          input.receivedDelta,
+          input.holdingsDelta,
+          input.isBuy ? 1 : 0,
+          input.isBuy ? 0 : 1,
+        );
+    } else {
+      // Bigint arithmetic in JS (SQLite INTEGER maxes at ~9.2e18, token amounts overflow)
+      const newCost = (BigInt(existing.total_cost_wei) + BigInt(input.costDelta)).toString();
+      const newReceived = (BigInt(existing.total_received_wei) + BigInt(input.receivedDelta)).toString();
+      const newHoldings = (BigInt(existing.holdings_raw) + BigInt(input.holdingsDelta)).toString();
+      const newBuy = existing.buy_count + (input.isBuy ? 1 : 0);
+      const newSell = existing.sell_count + (input.isBuy ? 0 : 1);
+
+      sqlite
+        .prepare(`
+          UPDATE positions
+          SET total_cost_wei = ?, total_received_wei = ?, holdings_raw = ?,
+              buy_count = ?, sell_count = ?, last_action_at = CURRENT_TIMESTAMP
+          WHERE wallet_id = ? AND coin_address = ?
+        `)
+        .run(newCost, newReceived, newHoldings, newBuy, newSell, input.walletId, coin);
+    }
+
+    const row = sqlite
+      .prepare("SELECT * FROM positions WHERE wallet_id = ? AND coin_address = ?")
+      .get(input.walletId, coin) as PositionRow;
+    return mapPosition(row);
+  },
+
+  getPosition(walletId: number, coinAddress: `0x${string}`): PositionRecord | null {
+    const row = sqlite
+      .prepare("SELECT * FROM positions WHERE wallet_id = ? AND coin_address = ?")
+      .get(walletId, coinAddress.toLowerCase()) as PositionRow | undefined;
+    return row ? mapPosition(row) : null;
+  },
+
+  listPositionsByWallet(walletId: number): PositionRecord[] {
+    const rows = sqlite
+      .prepare("SELECT * FROM positions WHERE wallet_id = ? ORDER BY last_action_at DESC")
+      .all(walletId) as PositionRow[];
+    return rows.map(mapPosition);
+  },
+
+  listPositionsByCoin(coinAddress: `0x${string}`): PositionRecord[] {
+    const rows = sqlite
+      .prepare("SELECT * FROM positions WHERE coin_address = ? ORDER BY wallet_id ASC")
+      .all(coinAddress.toLowerCase()) as PositionRow[];
+    return rows.map(mapPosition);
+  },
+
+  listPositionsByCluster(clusterId: number): PositionRecord[] {
+    const rows = sqlite
+      .prepare(`
+        SELECT p.*
+        FROM positions p
+        JOIN cluster_wallets cw ON cw.wallet_id = p.wallet_id
+        WHERE cw.cluster_id = ? AND cw.enabled = 1
+        ORDER BY p.coin_address, p.wallet_id
+      `)
+      .all(clusterId) as PositionRow[];
+    return rows.map(mapPosition);
+  },
+
+  listAllPositions(): PositionRecord[] {
+    const rows = sqlite
+      .prepare("SELECT * FROM positions ORDER BY last_action_at DESC")
+      .all() as PositionRow[];
+    return rows.map(mapPosition);
   },
 };
 

@@ -6,6 +6,7 @@ import { autonomyRouter } from "./routes/autonomy.js";
 import { clustersRouter } from "./routes/clusters.js";
 import { fundingRouter } from "./routes/funding.js";
 import { operationsRouter } from "./routes/operations.js";
+import { positionsRouter } from "./routes/positions.js";
 import { tradesRouter } from "./routes/trades.js";
 import { walletsRouter } from "./routes/wallets.js";
 import { getAutonomyConfig, startAutonomyLoop } from "./services/autonomy.js";
@@ -24,6 +25,7 @@ app.use("/funding", fundingRouter);
 app.use("/trades", tradesRouter);
 app.use("/clusters", clustersRouter);
 app.use("/operations", operationsRouter);
+app.use("/positions", positionsRouter);
 app.use("/autonomy", autonomyRouter);
 
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {

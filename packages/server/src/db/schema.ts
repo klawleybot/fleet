@@ -78,5 +78,39 @@ export function runMigrations(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_operations_status ON operations(status);
     CREATE INDEX IF NOT EXISTS idx_operations_cluster ON operations(cluster_id);
   `);
+
+  // --- Migration v2: monitoring columns + positions table ---
+  // Add amount_out and operation_id to trades if not present
+  const tradeColumns = db
+    .prepare("PRAGMA table_info(trades)")
+    .all() as Array<{ name: string }>;
+  const tradeColNames = new Set(tradeColumns.map((c) => c.name));
+  if (!tradeColNames.has("amount_out")) {
+    db.exec("ALTER TABLE trades ADD COLUMN amount_out TEXT");
+  }
+  if (!tradeColNames.has("operation_id")) {
+    db.exec("ALTER TABLE trades ADD COLUMN operation_id INTEGER REFERENCES operations(id)");
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS positions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      wallet_id INTEGER NOT NULL,
+      coin_address TEXT NOT NULL,
+      total_cost_wei TEXT NOT NULL DEFAULT '0',
+      total_received_wei TEXT NOT NULL DEFAULT '0',
+      holdings_raw TEXT NOT NULL DEFAULT '0',
+      realized_pnl_wei TEXT NOT NULL DEFAULT '0',
+      buy_count INTEGER NOT NULL DEFAULT 0,
+      sell_count INTEGER NOT NULL DEFAULT 0,
+      last_action_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(wallet_id, coin_address),
+      FOREIGN KEY(wallet_id) REFERENCES wallets(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_positions_wallet ON positions(wallet_id);
+    CREATE INDEX IF NOT EXISTS idx_positions_coin ON positions(coin_address);
+    CREATE INDEX IF NOT EXISTS idx_trades_operation ON trades(operation_id);
+  `);
 }
 

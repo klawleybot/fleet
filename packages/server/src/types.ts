@@ -20,11 +20,26 @@ export interface TradeRecord {
   fromToken: `0x${string}`;
   toToken: `0x${string}`;
   amountIn: string;
+  amountOut: string | null;
+  operationId: number | null;
   userOpHash: `0x${string}` | null;
   txHash: `0x${string}` | null;
   status: TradeStatus;
   errorMessage: string | null;
   createdAt: string;
+}
+
+export interface PositionRecord {
+  id: number;
+  walletId: number;
+  coinAddress: `0x${string}`;
+  totalCostWei: string;
+  totalReceivedWei: string;
+  holdingsRaw: string;
+  realizedPnlWei: string;
+  buyCount: number;
+  sellCount: number;
+  lastActionAt: string;
 }
 
 export interface FundingRecord {
