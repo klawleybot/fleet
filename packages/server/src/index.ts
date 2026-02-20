@@ -1,14 +1,19 @@
 import "dotenv/config";
 
+import { logger } from "./logger.js";
+
 process.on("uncaughtException", (err) => {
-  console.error("[FATAL] uncaughtException:", err);
+  logger.fatal({ err }, "uncaughtException");
 });
 process.on("unhandledRejection", (reason) => {
-  console.error("[FATAL] unhandledRejection:", reason);
+  logger.fatal({ reason }, "unhandledRejection");
 });
 import cors from "cors";
 import express from "express";
 import type { NextFunction, Request, Response } from "express";
+import PinoHttpModule from "pino-http";
+const pinoHttp = PinoHttpModule.default ?? PinoHttpModule;
+import { formatEther } from "viem";
 import { autonomyRouter } from "./routes/autonomy.js";
 import { clustersRouter } from "./routes/clusters.js";
 import { dashboardRouter } from "./routes/dashboard.js";
@@ -19,14 +24,58 @@ import { positionsRouter } from "./routes/positions.js";
 import { tradesRouter } from "./routes/trades.js";
 import { walletsRouter } from "./routes/wallets.js";
 import { getAutonomyConfig, startAutonomyLoop } from "./services/autonomy.js";
+import { getEthBalance } from "./services/balance.js";
 import { ensureMasterWallet } from "./services/wallet.js";
+import { db } from "./db/index.js";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(pinoHttp({ logger }));
 
-app.get("/health", (_req, res) => {
-  res.json({ ok: true });
+const startedAt = new Date().toISOString();
+let cachedMasterBalanceEth: string | null = null;
+let balanceCacheTime = 0;
+
+async function refreshMasterBalance(): Promise<string> {
+  const now = Date.now();
+  if (cachedMasterBalanceEth && now - balanceCacheTime < 60_000) {
+    return cachedMasterBalanceEth;
+  }
+  try {
+    const wallets = db.listWallets();
+    const master = wallets.find((w) => w.isMaster);
+    if (master) {
+      const bal = await getEthBalance(master.address);
+      cachedMasterBalanceEth = formatEther(bal);
+    } else {
+      cachedMasterBalanceEth = "0";
+    }
+  } catch {
+    cachedMasterBalanceEth = cachedMasterBalanceEth ?? "unknown";
+  }
+  balanceCacheTime = now;
+  return cachedMasterBalanceEth;
+}
+
+app.get("/health", async (_req, res) => {
+  try {
+    const trades = db.listTrades();
+    const allWallets = db.listWallets();
+    const activeFleetCount = allWallets.filter((w) => !w.isMaster).length;
+    const masterBalanceEth = await refreshMasterBalance();
+
+    res.json({
+      ok: true,
+      uptimeSec: Math.floor(process.uptime()),
+      startedAt,
+      lastTradeAt: trades.length > 0 ? trades[0]!.createdAt : null,
+      activeFleetCount,
+      masterBalanceEth,
+    });
+  } catch {
+    res.json({ ok: true, uptimeSec: Math.floor(process.uptime()), startedAt });
+  }
 });
 
 app.use("/wallets", walletsRouter);
@@ -41,6 +90,7 @@ app.use("/autonomy", autonomyRouter);
 
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   const message = error instanceof Error ? error.message : "Unhandled server error";
+  logger.error({ err: error }, message);
   res.status(500).json({ error: message });
 });
 
@@ -50,21 +100,21 @@ async function start(): Promise<void> {
   try {
     await ensureMasterWallet();
     app.listen(port, () => {
-      console.log(`pump-it-up server listening on http://localhost:${port}`);
+      logger.info({ port }, "pump-it-up server listening");
       const autonomyCfg = getAutonomyConfig();
       if (autonomyCfg.enabled && autonomyCfg.autoStart) {
         try {
           const status = startAutonomyLoop({ intervalSec: autonomyCfg.intervalSec });
-          console.log(`autonomy loop started interval=${status.intervalSec}s`);
+          logger.info({ intervalSec: status.intervalSec }, "autonomy loop started");
         } catch (error) {
           const message = error instanceof Error ? error.message : "failed to start autonomy loop";
-          console.error(`autonomy startup skipped: ${message}`);
+          logger.error({ err: error }, `autonomy startup skipped: ${message}`);
         }
       }
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to start";
-    console.error(message);
+    logger.fatal({ err: error }, message);
     process.exit(1);
   }
 }
