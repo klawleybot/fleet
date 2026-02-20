@@ -19,10 +19,11 @@ export const fleetsRouter = Router();
 
 /** POST /fleets — create a named fleet */
 fleetsRouter.post("/", async (req, res) => {
-  const { name, wallets, fundAmountWei, strategyMode } = req.body as {
+  const { name, wallets, fundAmountWei, sourceFleetName, strategyMode } = req.body as {
     name?: string;
     wallets?: number;
     fundAmountWei?: string;
+    sourceFleetName?: string;
     strategyMode?: string;
   };
 
@@ -38,6 +39,7 @@ fleetsRouter.post("/", async (req, res) => {
       name,
       walletCount: wallets,
       fundAmountWei,
+      sourceFleetName,
       strategyMode: strategyMode as "sync" | "staggered" | "momentum" | undefined,
     });
     return res.status(201).json(result);

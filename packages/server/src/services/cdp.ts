@@ -673,7 +673,7 @@ export async function swapFromSmartAccount(input: {
       smartAccountName: input.smartAccountName,
       calls,
     });
-    return { ...opResult, amountOut: quote.amountOut.toString() };
+    return { ...opResult, amountOut: quotedAmountOut.toString() };
   }
 
   const owner = await getOwnerAccountInternal();
