@@ -20,9 +20,11 @@ import {
 import { getChainConfig } from "./network.js";
 import { loadBundlerConfigFromEnv } from "./bundler/config.js";
 import { getBundlerRouter } from "./bundler/index.js";
-import { resolveDeterministicBuyRoute } from "./swapRoute.js";
-import { encodeV4ExactInSwap } from "./v4SwapEncoder.js";
+import { resolveDeterministicBuyRoute, resolveDeterministicSellRoute } from "./swapRoute.js";
+import { encodeV4ExactInSwap, getRouterAddress } from "./v4SwapEncoder.js";
 import { quoteExactInput, applySlippage } from "./v4Quoter.js";
+import { ensurePermit2Approval } from "./erc20.js";
+import { discoverPoolParams } from "./poolDiscovery.js";
 
 const OWNER_ACCOUNT_NAME = "fleet-owner";
 const MASTER_SMART_ACCOUNT_NAME = "master";
@@ -523,29 +525,58 @@ export async function swapFromSmartAccount(input: {
   }
 
   if (getSignerBackend() === "local") {
-    // Phase 1 scaffolding: validate deterministic route rules now;
-    // execution wiring to router calldata is next.
-    const route = resolveDeterministicBuyRoute({
-      fromToken: input.fromToken,
-      toToken: input.toToken,
-      maxHops: 3,
-    });
+    const WETH = "0x4200000000000000000000000000000000000006".toLowerCase();
+    const root = (process.env.SWAP_ROUTE_ROOT_TOKEN?.trim() || "0x4200000000000000000000000000000000000006").toLowerCase();
+    const fromNorm = input.fromToken.toLowerCase();
+    const isSell = fromNorm !== root && fromNorm !== WETH;
 
-    // Compute minAmountOut from slippage
-    // For ETH-in swaps, use address(0) as currencyIn
-    const swapPath = route.path.map((addr) =>
-      addr.toLowerCase() === "0x4200000000000000000000000000000000000006".toLowerCase()
-        && addr.toLowerCase() === route.path[0]!.toLowerCase()
-        ? ("0x0000000000000000000000000000000000000000" as `0x${string}`)
-        : addr,
-    );
+    const route = isSell
+      ? resolveDeterministicSellRoute({
+          fromToken: input.fromToken,
+          toToken: input.toToken,
+          maxHops: 3,
+        })
+      : resolveDeterministicBuyRoute({
+          fromToken: input.fromToken,
+          toToken: input.toToken,
+          maxHops: 3,
+        });
 
-    // Pre-quote to compute minAmountOut with slippage protection
-    const slippageBps = input.slippageBps;
     const publicClient = createPublicClient({
       chain: chainCfg.chain,
       transport: http(chainCfg.rpcUrl),
     });
+
+    // Discover pool params if missing
+    if (!route.poolParams || route.poolParams.length === 0) {
+      // The coin is always last in buy route path, first in sell route path
+      const coinAddress = isSell ? route.path[0]! : route.path[route.path.length - 1]!;
+      // Only discover if the coin isn't root/WETH
+      if (coinAddress.toLowerCase() !== root && coinAddress.toLowerCase() !== WETH) {
+        try {
+          const params = await discoverPoolParams({
+            client: publicClient,
+            chainId: chainCfg.chainId,
+            coinAddress,
+          });
+          route.poolParams = Array.from({ length: route.hops }, () => params);
+        } catch {
+          // Fall through with no pool params — will use defaults
+        }
+      }
+    }
+
+    // Map WETH→address(0) for native ETH handling
+    const swapPath = route.path.map((addr, idx) => {
+      if (addr.toLowerCase() !== WETH) return addr;
+      // For buys: first element (ETH in). For sells: last element (ETH out).
+      if (!isSell && idx === 0) return "0x0000000000000000000000000000000000000000" as `0x${string}`;
+      if (isSell && idx === route.path.length - 1) return "0x0000000000000000000000000000000000000000" as `0x${string}`;
+      return addr;
+    });
+
+    // Pre-quote to compute minAmountOut with slippage protection
+    const slippageBps = input.slippageBps;
     const quote = await quoteExactInput({
       chainId: chainCfg.chainId,
       client: publicClient,
@@ -564,9 +595,27 @@ export async function swapFromSmartAccount(input: {
       poolParamsPerHop: route.poolParams,
     });
 
+    const calls: Array<{ to: `0x${string}`; value: bigint; data?: `0x${string}` }> = [];
+
+    // For sells, ensure Permit2 approval for the Universal Router.
+    // V4 Router uses Permit2 for ERC20 SETTLE_ALL, not regular transferFrom.
+    if (isSell) {
+      const smartAccount = await getLocalSmartAccount(input.smartAccountName);
+      const routerAddress = getRouterAddress(chainCfg.chainId);
+      const permit2Calls = await ensurePermit2Approval({
+        client: publicClient,
+        token: input.fromToken,
+        owner: smartAccount.address,
+        router: routerAddress,
+      });
+      calls.push(...permit2Calls);
+    }
+
+    calls.push({ to: encoded.to, value: encoded.value, data: encoded.data });
+
     return submitUserOperationViaRouter({
       smartAccountName: input.smartAccountName,
-      calls: [{ to: encoded.to, value: encoded.value, data: encoded.data }],
+      calls,
     });
   }
 

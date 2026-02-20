@@ -65,6 +65,41 @@ export interface DeterministicRoute {
  * - Must reach ZORA anchor within maxHops
  * - Once at ZORA, upstream root is always ETH/WETH root
  */
+/**
+ * Resolve a sell route (coin→root) by computing the buy route (root→coin) and reversing it.
+ */
+export function resolveDeterministicSellRoute(input: {
+  fromToken: `0x${string}`;
+  toToken: `0x${string}`;
+  maxHops?: number;
+}): DeterministicRoute {
+  const root = getRootToken();
+  const from = normalize(input.fromToken);
+  const to = normalize(input.toToken);
+
+  if (to !== root) {
+    throw new Error(`Deterministic sell route requires toToken=${root} (got ${to})`);
+  }
+
+  if (from === root) {
+    return { path: [root], hops: 0 };
+  }
+
+  // Resolve the buy route (root→coin), then reverse for sell (coin→root)
+  const buyRoute = resolveDeterministicBuyRoute({
+    fromToken: root,
+    toToken: from,
+    maxHops: input.maxHops,
+  });
+
+  const reversedPath = [...buyRoute.path].reverse();
+  return {
+    path: reversedPath,
+    hops: reversedPath.length - 1,
+    poolParams: buyRoute.poolParams ? [...buyRoute.poolParams].reverse() : undefined,
+  };
+}
+
 export function resolveDeterministicBuyRoute(input: {
   fromToken: `0x${string}`;
   toToken: `0x${string}`;
