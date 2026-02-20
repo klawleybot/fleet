@@ -22,6 +22,7 @@ import { fundingRouter } from "./routes/funding.js";
 import { operationsRouter } from "./routes/operations.js";
 import { positionsRouter } from "./routes/positions.js";
 import { tradesRouter } from "./routes/trades.js";
+import { swingRouter } from "./routes/swing.js";
 import { walletsRouter } from "./routes/wallets.js";
 import { getAutonomyConfig, startAutonomyLoop } from "./services/autonomy.js";
 import { getEthBalance } from "./services/balance.js";
@@ -87,6 +88,7 @@ app.use("/operations", operationsRouter);
 app.use("/positions", positionsRouter);
 app.use("/dashboard", dashboardRouter);
 app.use("/autonomy", autonomyRouter);
+app.use("/swing", swingRouter);
 
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   const message = error instanceof Error ? error.message : "Unhandled server error";

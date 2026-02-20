@@ -12,6 +12,7 @@ import type {
   OperationType,
   PositionRecord,
   StrategyMode,
+  SwingConfigRecord,
   TradeRecord,
   TradeStatus,
   WalletRecord,
@@ -81,6 +82,21 @@ interface ClusterWalletRow {
   enabled: number;
   weight: number;
   added_at: string;
+}
+
+interface SwingConfigRow {
+  id: number;
+  fleet_name: string;
+  coin_address: string;
+  take_profit_bps: number;
+  stop_loss_bps: number;
+  trailing_stop_bps: number | null;
+  cooldown_sec: number;
+  slippage_bps: number;
+  enabled: number;
+  peak_pnl_bps: number | null;
+  last_action_at: string | null;
+  created_at: string;
 }
 
 interface OperationRow {
@@ -172,6 +188,23 @@ function mapClusterWallet(row: ClusterWalletRow): ClusterWalletRecord {
     enabled: row.enabled === 1,
     weight: row.weight,
     addedAt: row.added_at,
+  };
+}
+
+function mapSwingConfig(row: SwingConfigRow): SwingConfigRecord {
+  return {
+    id: row.id,
+    fleetName: row.fleet_name,
+    coinAddress: row.coin_address as `0x${string}`,
+    takeProfitBps: row.take_profit_bps,
+    stopLossBps: row.stop_loss_bps,
+    trailingStopBps: row.trailing_stop_bps,
+    cooldownSec: row.cooldown_sec,
+    slippageBps: row.slippage_bps,
+    enabled: row.enabled === 1,
+    peakPnlBps: row.peak_pnl_bps,
+    lastActionAt: row.last_action_at,
+    createdAt: row.created_at,
   };
 }
 
@@ -623,6 +656,100 @@ export const db = {
       .prepare("SELECT * FROM positions ORDER BY last_action_at DESC")
       .all() as PositionRow[];
     return rows.map(mapPosition);
+  },
+
+  // --- Swing Configs ---
+
+  createSwingConfig(input: {
+    fleetName: string;
+    coinAddress: `0x${string}`;
+    takeProfitBps?: number;
+    stopLossBps?: number;
+    trailingStopBps?: number | null;
+    cooldownSec?: number;
+    slippageBps?: number;
+  }): SwingConfigRecord {
+    const result = getSqlite()
+      .prepare(`
+        INSERT INTO swing_configs (fleet_name, coin_address, take_profit_bps, stop_loss_bps, trailing_stop_bps, cooldown_sec, slippage_bps)
+        VALUES (@fleet_name, @coin_address, @take_profit_bps, @stop_loss_bps, @trailing_stop_bps, @cooldown_sec, @slippage_bps)
+      `)
+      .run({
+        fleet_name: input.fleetName,
+        coin_address: input.coinAddress.toLowerCase(),
+        take_profit_bps: input.takeProfitBps ?? 1500,
+        stop_loss_bps: input.stopLossBps ?? 2000,
+        trailing_stop_bps: input.trailingStopBps ?? null,
+        cooldown_sec: input.cooldownSec ?? 300,
+        slippage_bps: input.slippageBps ?? 500,
+      });
+
+    const row = getSqlite()
+      .prepare("SELECT * FROM swing_configs WHERE id = ?")
+      .get(result.lastInsertRowid) as SwingConfigRow;
+    return mapSwingConfig(row);
+  },
+
+  getSwingConfig(fleetName: string, coinAddress: `0x${string}`): SwingConfigRecord | null {
+    const row = getSqlite()
+      .prepare("SELECT * FROM swing_configs WHERE fleet_name = ? AND coin_address = ?")
+      .get(fleetName, coinAddress.toLowerCase()) as SwingConfigRow | undefined;
+    return row ? mapSwingConfig(row) : null;
+  },
+
+  listSwingConfigs(enabledOnly?: boolean): SwingConfigRecord[] {
+    const sql = enabledOnly
+      ? "SELECT * FROM swing_configs WHERE enabled = 1 ORDER BY id ASC"
+      : "SELECT * FROM swing_configs ORDER BY id ASC";
+    const rows = getSqlite().prepare(sql).all() as SwingConfigRow[];
+    return rows.map(mapSwingConfig);
+  },
+
+  updateSwingConfig(id: number, patch: Partial<{
+    takeProfitBps: number;
+    stopLossBps: number;
+    trailingStopBps: number | null;
+    cooldownSec: number;
+    slippageBps: number;
+    enabled: boolean;
+    peakPnlBps: number | null;
+    lastActionAt: string | null;
+  }>): SwingConfigRecord {
+    const current = getSqlite().prepare("SELECT * FROM swing_configs WHERE id = ?").get(id) as SwingConfigRow | undefined;
+    if (!current) throw new Error(`Swing config ${id} not found`);
+
+    getSqlite()
+      .prepare(`
+        UPDATE swing_configs
+        SET take_profit_bps = @take_profit_bps,
+            stop_loss_bps = @stop_loss_bps,
+            trailing_stop_bps = @trailing_stop_bps,
+            cooldown_sec = @cooldown_sec,
+            slippage_bps = @slippage_bps,
+            enabled = @enabled,
+            peak_pnl_bps = @peak_pnl_bps,
+            last_action_at = @last_action_at
+        WHERE id = @id
+      `)
+      .run({
+        id,
+        take_profit_bps: patch.takeProfitBps ?? current.take_profit_bps,
+        stop_loss_bps: patch.stopLossBps ?? current.stop_loss_bps,
+        trailing_stop_bps: patch.trailingStopBps !== undefined ? patch.trailingStopBps : current.trailing_stop_bps,
+        cooldown_sec: patch.cooldownSec ?? current.cooldown_sec,
+        slippage_bps: patch.slippageBps ?? current.slippage_bps,
+        enabled: patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : current.enabled,
+        peak_pnl_bps: patch.peakPnlBps !== undefined ? patch.peakPnlBps : current.peak_pnl_bps,
+        last_action_at: patch.lastActionAt !== undefined ? patch.lastActionAt : current.last_action_at,
+      });
+
+    const row = getSqlite().prepare("SELECT * FROM swing_configs WHERE id = ?").get(id) as SwingConfigRow;
+    return mapSwingConfig(row);
+  },
+
+  deleteSwingConfig(id: number): boolean {
+    const result = getSqlite().prepare("DELETE FROM swing_configs WHERE id = ?").run(id);
+    return result.changes > 0;
   },
 };
 

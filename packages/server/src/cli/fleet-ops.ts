@@ -16,7 +16,7 @@
 import { createPublicClient, http, formatEther, parseEther, type Address } from "viem";
 import { base } from "viem/chains";
 import { resolveCoinRoute, getCoinBalance, type CoinRouteClient } from "../services/coinRoute.js";
-import { quoteExactInputSingle, applySlippage } from "../services/v4Quoter.js";
+import { applySlippage } from "../services/v4Quoter.js";
 import { encodeV4ExactInSwap, getRouterAddress } from "../services/v4SwapEncoder.js";
 import { ensurePermit2Approval } from "../services/erc20.js";
 import { getChainConfig } from "../services/network.js";
@@ -43,6 +43,7 @@ import {
 import { db } from "../db/index.js";
 import { swapFromSmartAccount } from "../services/cdp.js";
 import { recordTradePosition } from "../services/monitor.js";
+import { makePoolKey, quoteMultiHop } from "../services/quoter.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -65,43 +66,6 @@ function getMasterKey(): `0x${string}` {
   const pk = process.env.MASTER_WALLET_PRIVATE_KEY?.trim();
   if (!pk || !/^0x[0-9a-fA-F]{64}$/.test(pk)) throw new Error("MASTER_WALLET_PRIVATE_KEY not set");
   return pk as `0x${string}`;
-}
-
-function makePoolKey(
-  tokenIn: Address,
-  tokenOut: Address,
-  params: { fee: number; tickSpacing: number; hooks: Address },
-) {
-  const [c0, c1] =
-    tokenIn.toLowerCase() < tokenOut.toLowerCase()
-      ? [tokenIn, tokenOut]
-      : [tokenOut, tokenIn];
-  return {
-    poolKey: { currency0: c0 as Address, currency1: c1 as Address, fee: params.fee, tickSpacing: params.tickSpacing, hooks: params.hooks },
-    zeroForOne: tokenIn.toLowerCase() === c0.toLowerCase(),
-  };
-}
-
-async function quoteMultiHop(
-  client: ReturnType<typeof getClient>,
-  chainId: number,
-  path: Address[],
-  poolParams: Array<{ fee: number; tickSpacing: number; hooks: Address; hookData: string }>,
-  amountIn: bigint,
-): Promise<bigint> {
-  let currentAmount = amountIn;
-  for (let i = 0; i < path.length - 1; i++) {
-    const pk = makePoolKey(path[i]!, path[i + 1]!, poolParams[i]!);
-    const quote = await quoteExactInputSingle({
-      chainId,
-      client,
-      poolKey: pk.poolKey,
-      zeroForOne: pk.zeroForOne,
-      amountIn: currentAmount,
-    });
-    currentAmount = quote.amountOut;
-  }
-  return currentAmount;
 }
 
 // ---------------------------------------------------------------------------
@@ -569,6 +533,128 @@ async function handleFleet(args: string[]): Promise<void> {
       break;
     }
 
+    case "swing": {
+      const swingSub = args[1];
+      switch (swingSub) {
+        case "add": {
+          const fleetName = args[2];
+          const coin = args[3] as Address | undefined;
+          if (!fleetName || !coin) throw new Error("Usage: fleet swing add <name> <coin> [--take-profit 1500] [--stop-loss 2000] [--trailing-stop 500]");
+          const takeProfitBps = parseInt(getFlagValue(args, "take-profit", "1500")!);
+          const stopLossBps = parseInt(getFlagValue(args, "stop-loss", "2000")!);
+          const trailingStopStr = getFlagValue(args, "trailing-stop");
+          const cooldownSec = parseInt(getFlagValue(args, "cooldown", "300")!);
+          const slippageBps = parseInt(getFlagValue(args, "slippage", "500")!);
+
+          const config = db.createSwingConfig({
+            fleetName,
+            coinAddress: coin,
+            takeProfitBps,
+            stopLossBps,
+            trailingStopBps: trailingStopStr ? parseInt(trailingStopStr) : null,
+            cooldownSec,
+            slippageBps,
+          });
+          console.log(`✅ Swing config #${config.id} created for fleet "${fleetName}" / ${coin}`);
+          console.log(`   Take profit: ${config.takeProfitBps} bps, Stop loss: ${config.stopLossBps} bps`);
+          if (config.trailingStopBps) console.log(`   Trailing stop: ${config.trailingStopBps} bps`);
+          console.log(`   Cooldown: ${config.cooldownSec}s, Slippage: ${config.slippageBps} bps`);
+          break;
+        }
+        case "list": {
+          const configs = db.listSwingConfigs();
+          if (configs.length === 0) {
+            console.log("No swing configs found.");
+            break;
+          }
+          console.log(`\n${"ID".padEnd(5)} ${"Fleet".padEnd(15)} ${"Coin".padEnd(44)} ${"TP".padEnd(6)} ${"SL".padEnd(6)} ${"Trail".padEnd(6)} ${"On"}`);
+          console.log("-".repeat(90));
+          for (const c of configs) {
+            console.log(
+              `${String(c.id).padEnd(5)} ${c.fleetName.padEnd(15)} ${c.coinAddress.padEnd(44)} ${String(c.takeProfitBps).padEnd(6)} ${String(c.stopLossBps).padEnd(6)} ${String(c.trailingStopBps ?? "-").padEnd(6)} ${c.enabled ? "✅" : "❌"}`,
+            );
+          }
+          break;
+        }
+        case "remove": {
+          const fleetName = args[2];
+          const coin = args[3] as Address | undefined;
+          if (!fleetName || !coin) throw new Error("Usage: fleet swing remove <name> <coin>");
+          const existing = db.getSwingConfig(fleetName, coin);
+          if (!existing) throw new Error(`No swing config for ${fleetName} / ${coin}`);
+          db.deleteSwingConfig(existing.id);
+          console.log(`✅ Swing config #${existing.id} deleted`);
+          break;
+        }
+        case "enable":
+        case "disable": {
+          const fleetName = args[2];
+          const coin = args[3] as Address | undefined;
+          if (!fleetName || !coin) throw new Error(`Usage: fleet swing ${swingSub} <name> <coin>`);
+          const existing = db.getSwingConfig(fleetName, coin);
+          if (!existing) throw new Error(`No swing config for ${fleetName} / ${coin}`);
+          const enabled = swingSub === "enable";
+          db.updateSwingConfig(existing.id, { enabled });
+          console.log(`✅ Swing config #${existing.id} ${enabled ? "enabled" : "disabled"}`);
+          break;
+        }
+        case "status": {
+          const fleetName = args[2];
+          const coin = args[3] as Address | undefined;
+          if (!fleetName || !coin) throw new Error("Usage: fleet swing status <name> <coin>");
+          const existing = db.getSwingConfig(fleetName, coin);
+          if (!existing) throw new Error(`No swing config for ${fleetName} / ${coin}`);
+
+          const { evaluateSwingPosition } = await import("../services/swing.js");
+          const evaluation = await evaluateSwingPosition(existing);
+
+          console.log(`\nSwing Status: ${fleetName} / ${coin}`);
+          console.log(`  Enabled: ${existing.enabled ? "yes" : "no"}`);
+          console.log(`  Take Profit: ${existing.takeProfitBps} bps | Stop Loss: ${existing.stopLossBps} bps`);
+          if (existing.trailingStopBps) console.log(`  Trailing Stop: ${existing.trailingStopBps} bps (peak: ${existing.peakPnlBps ?? "none"})`);
+          console.log(`  Holdings: ${evaluation.totalHoldings}`);
+          if (!evaluation.skipped) {
+            console.log(`  Current Value: ${formatEther(evaluation.currentValueWei)} ETH`);
+            console.log(`  Cost Basis: ${formatEther(evaluation.costBasisWei)} ETH`);
+            console.log(`  P&L: ${evaluation.pnlBps} bps`);
+            console.log(`  Trigger: ${evaluation.trigger} — ${evaluation.reason}`);
+          } else {
+            console.log(`  Skipped: ${evaluation.skipReason}`);
+          }
+          break;
+        }
+        case "tick": {
+          const { runSwingTick } = await import("../services/swing.js");
+          console.log("Running swing tick...");
+          const tick = await runSwingTick();
+          console.log(`\nEvaluations: ${tick.evaluations.length}`);
+          for (const e of tick.evaluations) {
+            console.log(`  ${e.fleetName}/${e.coinAddress}: pnl=${e.pnlBps}bps trigger=${e.trigger}${e.skipped ? ` (skipped: ${e.skipReason})` : ""}`);
+          }
+          if (tick.sells.length) {
+            console.log(`Sells: ${tick.sells.length}`);
+            for (const s of tick.sells) {
+              console.log(`  config #${s.configId}: ${s.walletsSucceeded} sold, ${s.walletsFailed} failed, ${s.walletsSkipped} skipped, recovered ${formatEther(s.totalEthRecovered)} ETH`);
+            }
+          }
+          if (tick.errors.length) {
+            console.log(`Errors: ${tick.errors.join(", ")}`);
+          }
+          break;
+        }
+        default:
+          console.log(`Fleet swing subcommands:
+  fleet swing add <name> <coin>       — Add swing config [--take-profit] [--stop-loss] [--trailing-stop] [--cooldown] [--slippage]
+  fleet swing list                    — List all swing configs
+  fleet swing remove <name> <coin>    — Remove a swing config
+  fleet swing enable <name> <coin>    — Enable swing config
+  fleet swing disable <name> <coin>   — Disable swing config
+  fleet swing status <name> <coin>    — Show live P&L vs thresholds
+  fleet swing tick                    — Run one swing evaluation cycle`);
+      }
+      break;
+    }
+
     case "sweep": {
       const name = args[1];
       if (!name || name.startsWith("--")) throw new Error("Usage: fleet sweep <name> [--to-fleet name | --to-address 0x...]");
@@ -604,7 +690,12 @@ async function handleFleet(args: string[]): Promise<void> {
   fleet sell <name> <coin>            — Sell ALL coins from fleet wallets [--slippage 500]
         --amount-eth 0.01 [--slippage 500] [--over 10m] [--intervals N] [--no-jiggle]
   fleet sweep <name>                  — Sweep ETH back
-        [--to-fleet name | --to-address 0x...]`);
+        [--to-fleet name | --to-address 0x...]
+  fleet swing add <name> <coin>       — Add swing config
+  fleet swing list                    — List swing configs
+  fleet swing remove <name> <coin>    — Remove swing config
+  fleet swing status <name> <coin>    — Live P&L check
+  fleet swing tick                    — Manual swing evaluation`);
   }
 }
 

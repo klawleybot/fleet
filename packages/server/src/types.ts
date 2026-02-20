@@ -84,6 +84,21 @@ export interface ClusterWalletRecord {
   addedAt: string;
 }
 
+export interface SwingConfigRecord {
+  id: number;
+  fleetName: string;
+  coinAddress: `0x${string}`;
+  takeProfitBps: number;
+  stopLossBps: number;
+  trailingStopBps: number | null;
+  cooldownSec: number;
+  slippageBps: number;
+  enabled: boolean;
+  peakPnlBps: number | null;
+  lastActionAt: string | null;
+  createdAt: string;
+}
+
 export type OperationType = "FUNDING_REQUEST" | "SUPPORT_COIN" | "EXIT_COIN";
 export type OperationStatus = "pending" | "approved" | "executing" | "complete" | "failed";
 

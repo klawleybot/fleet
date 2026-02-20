@@ -93,6 +93,24 @@ export function runMigrations(db: Database): void {
   }
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS swing_configs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      fleet_name TEXT NOT NULL,
+      coin_address TEXT NOT NULL,
+      take_profit_bps INTEGER NOT NULL DEFAULT 1500,
+      stop_loss_bps INTEGER NOT NULL DEFAULT 2000,
+      trailing_stop_bps INTEGER,
+      cooldown_sec INTEGER NOT NULL DEFAULT 300,
+      slippage_bps INTEGER NOT NULL DEFAULT 500,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      peak_pnl_bps INTEGER,
+      last_action_at TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(fleet_name, coin_address)
+    );
+  `);
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS positions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       wallet_id INTEGER NOT NULL,
