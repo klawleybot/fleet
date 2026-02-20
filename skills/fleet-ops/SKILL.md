@@ -1,78 +1,74 @@
 ---
 name: fleet-ops
-description: Manage Zora coin fleet operations — spin up wallets, fund them, coordinate buys/sells, and exit positions. Uses the fleet server's trade, wallet, and funding services.
+description: Operate Zora coin trading fleets — create fleets, fund wallets, buy/sell coins with drip+jiggle, monitor P&L, sweep ETH. For Kelley or Flick.
 ---
 
-# Fleet Ops
+# Fleet Ops Skill
 
-Coordinate multi-wallet Zora coin trading operations on Base.
+Multi-wallet Zora coin trading on Base. Creates fleets of smart account wallets that buy/sell coins with randomized timing and amounts to avoid detection.
 
-## Prerequisites
+## Setup
 
-- Fleet server code at `packages/server/` in the fleet repo
-- Doppler env: `doppler run --project onchain-tooling --config dev`
-- Funded master wallet (`MASTER_WALLET_PRIVATE_KEY` in Doppler)
-- Pimlico bundler configured (`PIMLICO_BASE_BUNDLER_URL`)
+**Read first:** `docs/OPERATIONS.md` in the fleet repo for full API reference.
 
-## Commands
+**Repo:** `/Users/user/.openclaw/workspace/fleet` (yarn workspaces, server at `packages/server/`)
 
-### 1. Support a Coin (Full Fleet Buy)
-
-When user says "support [coin address] with [N] wallets" or similar:
-
-1. **Resolve route**: Use `resolveCoinRoute()` from `coinRoute.ts` to auto-discover the full swap path and pool params
-2. **Create fleet wallets**: `createFleetWallets(N)` from `wallet.ts`
-3. **Fund wallets**: `bootstrapFleetFunding({ amountWei })` from `funding.ts` — transfers ETH from master to each fleet wallet
-4. **Coordinate buy**: `strategySwap({ walletIds, fromToken: WETH, toToken: coinAddress, ... })` from `trade.ts`
-
-Amount per wallet: User specifies total ETH or per-wallet amount. Default 0.001 ETH per wallet.
-
-### 2. Exit Position (Full Fleet Sell)
-
-When user says "exit [coin address]" or "sell all [coin]":
-
-1. **Get fleet wallets**: `listWallets()` from `wallet.ts`
-2. **Check balances**: For each wallet, query `balanceOf(wallet, coin)` 
-3. **Ensure Permit2**: Each wallet needs Permit2 approval (one-time per coin)
-4. **Coordinate sell**: Each wallet sells its full coin balance back to ETH
-
-### 3. Fleet Status
-
-When user asks about fleet status:
-
-1. List wallets with ETH balances
-2. Show coin balances for any active positions
-3. Show trade history
-
-## Key Architecture
-
-```
-coinRoute.ts    — Auto-discovers swap path: coin ancestry + pool params from storage
-v4Quoter.ts     — On-chain quotes via V4 Quoter (quoteExactInputSingle per hop)
-v4SwapEncoder.ts — Encodes Universal Router V4_SWAP calldata
-erc20.ts        — Permit2 approval helpers (required for ERC20 sells)
-trade.ts        — Coordinated/strategy multi-wallet swaps
-wallet.ts       — Fleet wallet creation (deterministic from seed)
-funding.ts      — ETH distribution from master to fleet wallets
-cdp.ts          — UserOp submission via Pimlico bundler
+**Start server:**
+```bash
+cd /Users/user/.openclaw/workspace/fleet
+doppler run --project onchain-tooling --config dev -- \
+  SIGNER_BACKEND=local CDP_MOCK_MODE=0 APP_NETWORK=base PORT=4001 \
+  FLEET_KILL_SWITCH=false MAX_PER_WALLET_WEI=10000000000000000 \
+  npx tsx packages/server/src/index.ts
 ```
 
-## Critical Notes
+Or for one-off ops, use direct script execution (more reliable than HTTP server).
 
-- **Permit2 required for sells**: V4 Router uses Permit2 for ERC20 SETTLE_ALL. `ensurePermit2Approval()` handles this.
-- **3-hop paths**: Zora coins can be nested (coin → parent_coin → ZORA → ETH). Route resolver handles this automatically.
-- **ETH/ZORA pool**: Standard V4 pool (fee=3000, tickSpacing=60, no hooks). Always first/last hop.
-- **Doppler hooks**: Zora coin pools use custom Doppler hooks. Must use `quoteExactInputSingle` per hop (not `quoteExactInput`).
-- **Slippage**: Use 500bps (5%) for 3-hop Doppler paths. Tighter for 2-hop.
-- **Smart accounts**: Coinbase Smart Account v1.1, deterministic from `LOCAL_SIGNER_SEED` + wallet name.
+## How to Handle Requests
+
+### "Buy [coin] with [N] wallets"
+
+1. Check dashboard: `GET /dashboard` — confirm available ETH
+2. Create fleet (if needed): `POST /fleets` with `name`, `wallets`, `fundAmountWei`
+   - Pre-validates funding — will tell you if master needs more ETH
+3. Buy: `POST /fleets/:name/buy` with `coin`, `totalAmountWei`, `slippageBps: 300`
+   - Add `overMs` and `intervals` for drip (spread over time)
+   - Jiggle is ON by default (±15% per-wallet variance)
+4. Report: `GET /dashboard/fleet/:name` — show positions and P&L
+
+### "Sell [coin]" or "Exit"
+
+1. Sell: `POST /fleets/:name/sell` with `coin`, `slippageBps: 300`
+2. Report P&L: `GET /dashboard/fleet/:name`
+3. Optional sweep: `POST /fleets/:name/sweep` to consolidate ETH back to master
+
+### "How are we doing?" / "Status"
+
+1. `GET /dashboard` — global view: master balance, all fleets, total ETH, global P&L
+2. For specific fleet: `GET /dashboard/fleet/:name`
+
+### "Move ETH from X to Y"
+
+Use sweep: `POST /fleets/:name/sweep` with `targetFleet` or `targetAddress`
+
+## Key Facts
+
+- **Route auto-discovery**: No need to specify paths. System reads on-chain coin ancestry.
+- **3-hop paths common**: coin → parent → ZORA → ETH. Quoted per-hop (Doppler hooks block multi-hop).
+- **Slippage**: Use 300 bps (3%) for Doppler pools. Tighter for simple pools.
+- **Gas**: ~0.0003 ETH per UserOp on Base. Budget per wallet = trade amount + (gas × number of trades).
+- **Permit2**: Required for sells. Handled automatically.
+- **Jiggle**: Randomizes per-wallet amounts (±15%). Total is always preserved exactly.
+- **Drip**: Spreads buys over time in intervals. Random jitter within each interval.
+
+## Talking to Kelley vs Flick
+
+- **Kelley**: Use plain language. "Your fleet bought 0.005 ETH of the coin across 5 wallets over 10 minutes. You're up 0.0007 ETH so far."
+- **Flick**: Technical details welcome. Include tx hashes, per-wallet breakdowns, gas costs.
 
 ## Running Tests
 
 ```bash
-# Unit tests (no network)
-cd packages/server && npx vitest run
-
-# Mainnet e2e (real transactions!)
-E2E_BASE_MAINNET=1 doppler run --project onchain-tooling --config dev -- \
-  npx vitest run packages/server/tests/e2e.mainnet-swap.spec.ts
+cd /Users/user/.openclaw/workspace/fleet
+yarn test    # 109+ tests, all should pass
 ```
