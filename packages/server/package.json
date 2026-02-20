@@ -8,6 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:e2e:base-live": "E2E_BASE_LIVE=1 APP_NETWORK=base-sepolia SIGNER_BACKEND=local CDP_MOCK_MODE=false BUNDLER_PRIMARY_NAME=pimlico vitest run --config vitest.e2e.config.ts tests/e2e.local-funding.spec.ts"
   },

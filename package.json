@@ -10,6 +10,7 @@
     "dev": "yarn workspace @pump-it-up/server dev",
     "dev:server": "yarn workspace @pump-it-up/server dev",
     "dev:web": "yarn workspace @pump-it-up/web dev",
+    "test": "yarn workspace @pump-it-up/server test",
     "build": "yarn workspaces run build",
     "typecheck": "yarn workspaces run typecheck",
     "test:e2e": "yarn workspace @pump-it-up/server test:e2e",
