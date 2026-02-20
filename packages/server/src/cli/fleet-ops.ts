@@ -269,6 +269,40 @@ async function cmdStatus(coin?: Address) {
   }
 }
 
+async function cmdVerify() {
+  const client = getClient();
+  const owner = privateKeyToAccount(getMasterKey());
+  const smartAccount = await toCoinbaseSmartAccount({ client, owners: [owner], version: "1.1" });
+
+  console.log("=== Key Verification ===");
+  console.log(`Owner (from MASTER_WALLET_PRIVATE_KEY): ${owner.address}`);
+  console.log(`Smart Account (derived):                ${smartAccount.address}`);
+
+  const { db } = await import("../db/index.js");
+  const dbMaster = db.getMasterWallet();
+  if (!dbMaster) {
+    console.log("\n⚠️  No master wallet in DB yet (will be created on first run).");
+  } else {
+    console.log(`\nDB master wallet (id=${dbMaster.id}):`);
+    console.log(`  address:       ${dbMaster.address}`);
+    console.log(`  owner_address: ${dbMaster.ownerAddress}`);
+
+    const ownerMatch = dbMaster.ownerAddress.toLowerCase() === owner.address.toLowerCase();
+    const smartMatch = dbMaster.address.toLowerCase() === smartAccount.address.toLowerCase();
+
+    if (ownerMatch && smartMatch) {
+      console.log("\n✅ All addresses match. Key and DB are consistent.");
+    } else {
+      if (!ownerMatch) console.log(`\n❌ OWNER MISMATCH: DB has ${dbMaster.ownerAddress}, key derives ${owner.address}`);
+      if (!smartMatch) console.log(`\n❌ SMART ACCOUNT MISMATCH: DB has ${dbMaster.address}, key derives ${smartAccount.address}`);
+      console.log("\nAction needed: either restore the correct private key or delete the DB master record.");
+    }
+  }
+
+  const ethBal = await client.getBalance({ address: smartAccount.address });
+  console.log(`\nSmart Account ETH balance: ${formatEther(ethBal)}`);
+}
+
 // ---------------------------------------------------------------------------
 // CLI entry
 // ---------------------------------------------------------------------------
@@ -307,6 +341,10 @@ async function main() {
         await cmdStatus(args[1] as Address | undefined);
         break;
 
+      case "verify":
+        await cmdVerify();
+        break;
+
       default:
         console.log(`Fleet Ops CLI
 
@@ -314,7 +352,8 @@ Commands:
   route  <coin>  — Resolve swap path and quote
   buy    <coin>  — Buy coin with ETH [--amount-eth 0.001] [--slippage 500]
   sell   <coin>  — Sell all coins back to ETH [--slippage 500]
-  status [coin]  — Show wallet balances`);
+  status [coin]  — Show wallet balances
+  verify         — Verify master key ↔ DB consistency`);
     }
   } catch (err) {
     console.error("Error:", err instanceof Error ? err.message : err);

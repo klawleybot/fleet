@@ -8,12 +8,29 @@ import type { WalletRecord } from "../types.js";
 import { getEthBalance } from "./balance.js";
 
 export async function ensureMasterWallet(): Promise<WalletRecord> {
+  const { owner, smartAccount } = await getOrCreateMasterSmartAccount();
+
   const existingMaster = db.getMasterWallet();
   if (existingMaster) {
+    // Validate: DB record must match the live derived addresses.
+    // A mismatch means the private key changed without resetting the DB.
+    if (existingMaster.ownerAddress.toLowerCase() !== owner.address.toLowerCase()) {
+      throw new Error(
+        `MASTER KEY MISMATCH: DB owner ${existingMaster.ownerAddress} ≠ derived owner ${owner.address}. ` +
+        `The MASTER_WALLET_PRIVATE_KEY (or LOCAL_SIGNER_SEED) changed since this DB was created. ` +
+        `Either restore the original key or delete the master wallet record (id=${existingMaster.id}) to re-derive.`,
+      );
+    }
+    if (existingMaster.address.toLowerCase() !== smartAccount.address.toLowerCase()) {
+      throw new Error(
+        `MASTER SMART ACCOUNT MISMATCH: DB address ${existingMaster.address} ≠ derived ${smartAccount.address}. ` +
+        `This should not happen if the owner key matches. Possible chain/version drift. ` +
+        `Delete the master wallet record (id=${existingMaster.id}) to re-derive.`,
+      );
+    }
     return existingMaster;
   }
 
-  const { owner, smartAccount } = await getOrCreateMasterSmartAccount();
   return db.createWallet({
     name: "master",
     address: smartAccount.address,
