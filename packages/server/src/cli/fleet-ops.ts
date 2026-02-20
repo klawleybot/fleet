@@ -27,6 +27,20 @@ import {
   waitForUserOperationReceipt,
 } from "viem/account-abstraction";
 import { privateKeyToAccount } from "viem/accounts";
+import {
+  createFleet,
+  getFleetByName,
+  listFleets,
+  sweepFleet,
+  getFleetStatusByName,
+} from "../services/fleet.js";
+import { dripSwap } from "../services/trade.js";
+import {
+  requestSupportCoinOperation,
+  requestExitCoinOperation,
+  approveAndExecuteOperation,
+} from "../services/operations.js";
+import { db } from "../db/index.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -304,10 +318,238 @@ async function cmdVerify() {
 }
 
 // ---------------------------------------------------------------------------
+// Fleet subcommands
+// ---------------------------------------------------------------------------
+
+const WETH_BASE: Address = "0x4200000000000000000000000000000000000006";
+
+function parseDuration(s: string): number {
+  const m = s.match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h)$/i);
+  if (!m) throw new Error(`Invalid duration: "${s}" (use e.g. 30s, 10m, 1h)`);
+  const val = parseFloat(m[1]!);
+  switch (m[2]!.toLowerCase()) {
+    case "ms": return val;
+    case "s": return val * 1_000;
+    case "m": return val * 60_000;
+    case "h": return val * 3_600_000;
+    default: throw new Error(`Unknown unit: ${m[2]}`);
+  }
+}
+
+function hasFlag(args: string[], name: string): boolean {
+  return args.includes(`--${name}`);
+}
+
+function getFlagValue(args: string[], name: string, def?: string): string | undefined {
+  const idx = args.indexOf(`--${name}`);
+  if (idx >= 0 && args[idx + 1] && !args[idx + 1]!.startsWith("--")) return args[idx + 1]!;
+  return def;
+}
+
+async function handleFleet(args: string[]): Promise<void> {
+  const sub = args[0];
+
+  switch (sub) {
+    case "list": {
+      const fleets = listFleets();
+      if (fleets.length === 0) {
+        console.log("No fleets found.");
+        return;
+      }
+      console.log(`\n${"Name".padEnd(20)} ${"Wallets".padEnd(10)} ${"Strategy".padEnd(12)} Created`);
+      console.log("-".repeat(65));
+      for (const f of fleets) {
+        console.log(
+          `${f.name.padEnd(20)} ${String(f.wallets.length).padEnd(10)} ${f.strategyMode.padEnd(12)} ${f.createdAt}`,
+        );
+      }
+      console.log(`\n${fleets.length} fleet(s) total.`);
+      break;
+    }
+
+    case "create": {
+      const name = args[1];
+      if (!name || name.startsWith("--")) throw new Error("Usage: fleet create <name> --wallets N [--fund-eth 0.001] [--source-fleet name] [--strategy sync|staggered|momentum]");
+      const walletCount = parseInt(getFlagValue(args, "wallets", "0") || "0");
+      if (!walletCount || walletCount < 1) throw new Error("--wallets N is required (1-100)");
+      const fundEth = getFlagValue(args, "fund-eth");
+      const sourceFleet = getFlagValue(args, "source-fleet");
+      const strategy = getFlagValue(args, "strategy") as "sync" | "staggered" | "momentum" | undefined;
+
+      console.log(`Creating fleet "${name}" with ${walletCount} wallets...`);
+      const result = await createFleet({
+        name,
+        walletCount,
+        fundAmountWei: fundEth ? parseEther(fundEth).toString() : undefined,
+        sourceFleetName: sourceFleet,
+        strategyMode: strategy,
+      });
+
+      console.log(`\n✅ Fleet "${result.fleet.name}" created (cluster ${result.fleet.clusterId})`);
+      console.log(`   Wallets: ${result.fleet.wallets.length}`);
+      console.log(`   Strategy: ${result.fleet.strategyMode}`);
+      if (result.fundingOperationId) {
+        console.log(`   Funding operation: #${result.fundingOperationId}`);
+      }
+      for (const w of result.fleet.wallets) {
+        console.log(`   - wallet #${w.id}: ${w.address}`);
+      }
+      break;
+    }
+
+    case "status": {
+      const name = args[1];
+      if (!name || name.startsWith("--")) throw new Error("Usage: fleet status <name> [--refresh]");
+      const refresh = hasFlag(args, "refresh");
+
+      console.log(`Fetching status for fleet "${name}"${refresh ? " (refreshing balances)" : ""}...`);
+      const summary = await getFleetStatusByName(name, refresh);
+
+      console.log(`\nFleet: ${summary.clusterName} (cluster ${summary.clusterId})`);
+      console.log(`Wallets: ${summary.walletCount}`);
+      console.log(`Total cost: ${formatEther(BigInt(summary.totalCostWei))} ETH`);
+      console.log(`Total received: ${formatEther(BigInt(summary.totalReceivedWei))} ETH`);
+      console.log(`Realized P&L: ${formatEther(BigInt(summary.totalRealizedPnlWei))} ETH`);
+
+      if (summary.coinSummaries.length > 0) {
+        console.log(`\nCoin Summaries:`);
+        for (const cs of summary.coinSummaries) {
+          console.log(`  ${cs.coinAddress}`);
+          console.log(`    Cost: ${formatEther(BigInt(cs.totalCostWei))} ETH | Holdings: ${cs.totalHoldings} | Wallets: ${cs.walletCount}`);
+          console.log(`    Realized P&L: ${formatEther(BigInt(cs.totalRealizedPnlWei))} ETH | Unrealized: ${cs.totalUnrealizedPnlWei ? formatEther(BigInt(cs.totalUnrealizedPnlWei)) + " ETH" : "?"}`);
+        }
+      }
+
+      if (summary.positions.length > 0) {
+        console.log(`\nPositions:`);
+        for (const p of summary.positions) {
+          console.log(`  wallet #${p.walletId} ${p.walletAddress} — ${p.coinAddress}`);
+          console.log(`    cost=${formatEther(BigInt(p.totalCostWei))} ETH holdings=${p.holdingsDb} realized=${formatEther(BigInt(p.realizedPnlWei))} ETH`);
+        }
+      }
+      break;
+    }
+
+    case "buy":
+    case "sell": {
+      const isBuy = sub === "buy";
+      const name = args[1];
+      const coin = args[2] as Address | undefined;
+      if (!name || !coin || name.startsWith("--") || coin.startsWith("--")) {
+        throw new Error(`Usage: fleet ${sub} <name> <coin> --amount-eth 0.01 [--slippage 500] [--over 10m] [--intervals N] [--no-jiggle]`);
+      }
+      const amountEth = getFlagValue(args, "amount-eth");
+      if (!amountEth) throw new Error("--amount-eth is required");
+      const slippage = parseInt(getFlagValue(args, "slippage", "500")!);
+      const overStr = getFlagValue(args, "over");
+      const intervalsStr = getFlagValue(args, "intervals");
+      const noJiggle = hasFlag(args, "no-jiggle");
+
+      const fleet = getFleetByName(name);
+      if (!fleet) throw new Error(`Fleet "${name}" not found`);
+
+      const totalWei = parseEther(amountEth);
+      const fromToken: Address = isBuy ? WETH_BASE : coin;
+      const toToken: Address = isBuy ? coin : WETH_BASE;
+
+      console.log(`\nFleet ${sub}: ${name} (${fleet.wallets.length} wallets)`);
+      console.log(`  ${isBuy ? "Buy" : "Sell"} ${coin}`);
+      console.log(`  Amount: ${amountEth} ETH, Slippage: ${slippage} bps`);
+
+      if (overStr) {
+        // Drip mode
+        const durationMs = parseDuration(overStr);
+        const intervals = intervalsStr ? parseInt(intervalsStr) : undefined;
+        console.log(`  Mode: drip over ${overStr} (${durationMs}ms)${intervals ? `, ${intervals} intervals` : ""}`);
+        console.log(`  Jiggle: ${noJiggle ? "off" : "on"}`);
+
+        const walletIds = fleet.wallets.map((w) => w.id);
+        const results = await dripSwap({
+          walletIds,
+          fromToken,
+          toToken,
+          totalAmountInWei: totalWei,
+          slippageBps: slippage,
+          durationMs,
+          intervals,
+          jiggle: !noJiggle,
+        });
+
+        console.log(`\n✅ Completed ${results.length} trades:`);
+        for (const r of results) {
+          console.log(`  wallet #${r.walletId}: ${r.status} — in=${r.amountIn} out=${r.amountOut ?? "?"}`);
+        }
+      } else {
+        // Operations mode (coordinated swap)
+        const opFn = isBuy ? requestSupportCoinOperation : requestExitCoinOperation;
+        const op = opFn({
+          clusterId: fleet.clusterId,
+          coinAddress: coin,
+          totalAmountWei: totalWei.toString(),
+          slippageBps: slippage,
+          requestedBy: "cli",
+        });
+        console.log(`  Operation #${op.id} created (${op.type}, status: ${op.status})`);
+        console.log("  Auto-approving and executing...");
+
+        const result = await approveAndExecuteOperation({
+          operationId: op.id,
+          approvedBy: "cli",
+        });
+        console.log(`\n✅ Operation #${result.id} ${result.status}`);
+      }
+      break;
+    }
+
+    case "sweep": {
+      const name = args[1];
+      if (!name || name.startsWith("--")) throw new Error("Usage: fleet sweep <name> [--to-fleet name | --to-address 0x...]");
+      const toFleet = getFlagValue(args, "to-fleet");
+      const toAddress = getFlagValue(args, "to-address") as Address | undefined;
+
+      console.log(`Sweeping fleet "${name}"...`);
+      const result = await sweepFleet({
+        sourceFleetName: name,
+        targetFleetName: toFleet,
+        targetAddress: toAddress,
+      });
+
+      console.log(`\n✅ Sweep complete`);
+      console.log(`  Target: ${result.targetAddress}`);
+      console.log(`  Total swept: ${formatEther(result.totalSwept)} ETH`);
+      console.log(`  Failed: ${formatEther(result.totalFailed)} ETH`);
+      console.log(`  Transfers: ${result.transfers.length}`);
+      for (const t of result.transfers) {
+        console.log(`    ${t.wallet} (${t.address}): ${formatEther(t.amountSent)} ETH — ${t.txHash ?? t.status}`);
+      }
+      break;
+    }
+
+    default:
+      console.log(`Fleet subcommands:
+  fleet list                          — List all fleets with wallet counts
+  fleet create <name> --wallets N     — Create a named fleet
+        [--fund-eth 0.001] [--source-fleet name] [--strategy sync|staggered|momentum]
+  fleet status <name> [--refresh]     — Show fleet status with positions/P&L
+  fleet buy  <name> <coin>            — Buy coin with fleet wallets
+        --amount-eth 0.01 [--slippage 500] [--over 10m] [--intervals N] [--no-jiggle]
+  fleet sell <name> <coin>            — Sell coin from fleet wallets
+        --amount-eth 0.01 [--slippage 500] [--over 10m] [--intervals N] [--no-jiggle]
+  fleet sweep <name>                  — Sweep ETH back
+        [--to-fleet name | --to-address 0x...]`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // CLI entry
 // ---------------------------------------------------------------------------
 
 async function main() {
+  const dopplerConfig = process.env.DOPPLER_CONFIG ?? "unknown";
+  if (dopplerConfig === "prd" || dopplerConfig.startsWith("prd_")) {
+    console.log("⚠️  PRODUCTION — using live keys and real funds\n");
+  }
+
   const args = process.argv.slice(2);
   const cmd = args[0];
 
@@ -345,6 +587,10 @@ async function main() {
         await cmdVerify();
         break;
 
+      case "fleet":
+        await handleFleet(args.slice(1));
+        break;
+
       default:
         console.log(`Fleet Ops CLI
 
@@ -353,7 +599,15 @@ Commands:
   buy    <coin>  — Buy coin with ETH [--amount-eth 0.001] [--slippage 500]
   sell   <coin>  — Sell all coins back to ETH [--slippage 500]
   status [coin]  — Show wallet balances
-  verify         — Verify master key ↔ DB consistency`);
+  verify         — Verify master key ↔ DB consistency
+
+Fleet Commands:
+  fleet list                          — List all fleets
+  fleet create <name> --wallets N     — Create a fleet [--fund-eth] [--source-fleet] [--strategy]
+  fleet status <name> [--refresh]     — Fleet status with positions/P&L
+  fleet buy  <name> <coin>            — Buy with fleet [--amount-eth] [--slippage] [--over] [--intervals] [--no-jiggle]
+  fleet sell <name> <coin>            — Sell from fleet [--amount-eth] [--slippage] [--over] [--intervals] [--no-jiggle]
+  fleet sweep <name>                  — Sweep ETH [--to-fleet | --to-address]`);
     }
   } catch (err) {
     console.error("Error:", err instanceof Error ? err.message : err);

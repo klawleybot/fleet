@@ -43,9 +43,9 @@ function parseAllowList(name: string): Set<string> {
 export function getPolicy() {
   return {
     killSwitch: parseBoolEnv("FLEET_KILL_SWITCH", false),
-    maxFundingWei: parseBigIntEnv("MAX_FUNDING_WEI", 5_000_000_000_000_000n), // 0.005 ETH
-    maxTradeWei: parseBigIntEnv("MAX_TRADE_WEI", 3_000_000_000_000_000n), // 0.003 ETH
-    maxPerWalletWei: parseBigIntEnv("MAX_PER_WALLET_WEI", 1_000_000_000_000_000n), // 0.001 ETH
+    maxFundingWei: parseBigIntEnv("MAX_FUNDING_WEI", 30_000_000_000_000_000n), // 0.03 ETH
+    maxTradeWei: parseBigIntEnv("MAX_TRADE_WEI", 5_000_000_000_000_000n), // 0.005 ETH
+    maxPerWalletWei: parseBigIntEnv("MAX_PER_WALLET_WEI", 3_000_000_000_000_000n), // 0.003 ETH
     maxSlippageBps: parseIntEnv("MAX_SLIPPAGE_BPS", 400),
     clusterCooldownSec: parseIntEnv("CLUSTER_COOLDOWN_SEC", 45),
     requireWatchlistCoin: parseBoolEnv("REQUIRE_WATCHLIST_COIN", true),

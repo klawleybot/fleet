@@ -98,6 +98,21 @@ const port = Number.parseInt(process.env.PORT ?? "4020", 10);
 
 async function start(): Promise<void> {
   try {
+    // Log environment context
+    const dopplerConfig = process.env.DOPPLER_CONFIG ?? "unknown";
+    const network = process.env.APP_NETWORK ?? "unknown";
+    const mockMode = process.env.CDP_MOCK_MODE === "1";
+
+    if (dopplerConfig === "prd" || dopplerConfig.startsWith("prd_")) {
+      if (mockMode) {
+        logger.fatal("Refusing to start: CDP_MOCK_MODE=1 with production config");
+        process.exit(1);
+      }
+      logger.warn("⚠️  PRODUCTION MODE — using live keys and real funds");
+    }
+
+    logger.info({ dopplerConfig, network, mockMode }, "fleet server starting");
+
     await ensureMasterWallet();
     app.listen(port, () => {
       logger.info({ port }, "pump-it-up server listening");

@@ -22,8 +22,15 @@ Direct script execution — no server needed. Uses Doppler for secrets.
 
 ```bash
 cd /Users/user/.openclaw/workspace/fleet/packages/server
+
+# Development (unfunded key, safe to experiment):
 doppler run --project onchain-tooling --config dev -- npx tsx src/cli/fleet-ops.ts <command>
+
+# Production (live funds — prints ⚠️ PRODUCTION banner):
+doppler run --project onchain-tooling --config prd -- npx tsx src/cli/fleet-ops.ts <command>
 ```
+
+**Always use `--config prd` for live trading.** The `dev` config has a separate unfunded key.
 
 **Commands:**
 
@@ -49,7 +56,9 @@ Fleet HTTP server managed via PM2.
 
 ```bash
 cd /Users/user/.openclaw/workspace/fleet/packages/server
-doppler run --project onchain-tooling --config dev -- npx tsx src/cli/fleet-service.ts <command>
+
+# Production:
+doppler run --project onchain-tooling --config prd -- npx tsx src/cli/fleet-service.ts <command>
 ```
 
 | Command | Description |
