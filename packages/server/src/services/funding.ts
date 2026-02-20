@@ -103,7 +103,7 @@ export async function distributeFunding(input: {
   const tasks = destinations.map((destination) =>
     limiter(async () => {
       try {
-        const useOwnerForLocal = process.env.FUNDING_LOCAL_SOURCE?.trim().toLowerCase() !== "smart";
+        const useOwnerForLocal = process.env.FUNDING_LOCAL_SOURCE?.trim().toLowerCase() === "owner";
         const result =
           backend === "local" && useOwnerForLocal
             ? await transferFromOwnerAccount({
