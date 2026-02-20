@@ -41,6 +41,8 @@ import {
   approveAndExecuteOperation,
 } from "../services/operations.js";
 import { db } from "../db/index.js";
+import { swapFromSmartAccount } from "../services/cdp.js";
+import { recordTradePosition } from "../services/monitor.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -430,13 +432,11 @@ async function handleFleet(args: string[]): Promise<void> {
       break;
     }
 
-    case "buy":
-    case "sell": {
-      const isBuy = sub === "buy";
+    case "buy": {
       const name = args[1];
       const coin = args[2] as Address | undefined;
       if (!name || !coin || name.startsWith("--") || coin.startsWith("--")) {
-        throw new Error(`Usage: fleet ${sub} <name> <coin> --amount-eth 0.01 [--slippage 500] [--over 10m] [--intervals N] [--no-jiggle]`);
+        throw new Error("Usage: fleet buy <name> <coin> --amount-eth 0.01 [--slippage 500] [--over 10m] [--intervals N] [--no-jiggle]");
       }
       const amountEth = getFlagValue(args, "amount-eth");
       if (!amountEth) throw new Error("--amount-eth is required");
@@ -449,15 +449,12 @@ async function handleFleet(args: string[]): Promise<void> {
       if (!fleet) throw new Error(`Fleet "${name}" not found`);
 
       const totalWei = parseEther(amountEth);
-      const fromToken: Address = isBuy ? WETH_BASE : coin;
-      const toToken: Address = isBuy ? coin : WETH_BASE;
 
-      console.log(`\nFleet ${sub}: ${name} (${fleet.wallets.length} wallets)`);
-      console.log(`  ${isBuy ? "Buy" : "Sell"} ${coin}`);
+      console.log(`\nFleet buy: ${name} (${fleet.wallets.length} wallets)`);
+      console.log(`  Buy ${coin}`);
       console.log(`  Amount: ${amountEth} ETH, Slippage: ${slippage} bps`);
 
       if (overStr) {
-        // Drip mode
         const durationMs = parseDuration(overStr);
         const intervals = intervalsStr ? parseInt(intervalsStr) : undefined;
         console.log(`  Mode: drip over ${overStr} (${durationMs}ms)${intervals ? `, ${intervals} intervals` : ""}`);
@@ -466,8 +463,8 @@ async function handleFleet(args: string[]): Promise<void> {
         const walletIds = fleet.wallets.map((w) => w.id);
         const results = await dripSwap({
           walletIds,
-          fromToken,
-          toToken,
+          fromToken: WETH_BASE,
+          toToken: coin,
           totalAmountInWei: totalWei,
           slippageBps: slippage,
           durationMs,
@@ -480,9 +477,7 @@ async function handleFleet(args: string[]): Promise<void> {
           console.log(`  wallet #${r.walletId}: ${r.status} — in=${r.amountIn} out=${r.amountOut ?? "?"}`);
         }
       } else {
-        // Operations mode (coordinated swap)
-        const opFn = isBuy ? requestSupportCoinOperation : requestExitCoinOperation;
-        const op = opFn({
+        const op = requestSupportCoinOperation({
           clusterId: fleet.clusterId,
           coinAddress: coin,
           totalAmountWei: totalWei.toString(),
@@ -498,6 +493,79 @@ async function handleFleet(args: string[]): Promise<void> {
         });
         console.log(`\n✅ Operation #${result.id} ${result.status}`);
       }
+      break;
+    }
+
+    case "sell": {
+      const name = args[1];
+      const coin = args[2] as Address | undefined;
+      if (!name || !coin || name.startsWith("--") || coin.startsWith("--")) {
+        throw new Error("Usage: fleet sell <name> <coin> [--slippage 500]");
+      }
+      const slippage = parseInt(getFlagValue(args, "slippage", "500")!);
+
+      const fleet = getFleetByName(name);
+      if (!fleet) throw new Error(`Fleet "${name}" not found`);
+
+      console.log(`\nFleet sell: ${name} (${fleet.wallets.length} wallets)`);
+      console.log(`  Sell all ${coin}`);
+      console.log(`  Slippage: ${slippage} bps`);
+      console.log(`  Querying balances...\n`);
+
+      const client = getClient();
+      let totalRecovered = 0n;
+      let successes = 0;
+      let failures = 0;
+      let skipped = 0;
+
+      for (const wallet of fleet.wallets) {
+        const balance = await getCoinBalance(
+          client as unknown as CoinRouteClient,
+          coin,
+          wallet.address as Address,
+        );
+
+        if (balance === 0n) {
+          console.log(`  ${wallet.name}: no coins, skipping`);
+          skipped++;
+          continue;
+        }
+
+        console.log(`  ${wallet.name}: selling ${balance} coins...`);
+        try {
+          const result = await swapFromSmartAccount({
+            smartAccountName: wallet.cdpAccountName,
+            fromToken: coin,
+            toToken: WETH_BASE,
+            fromAmount: balance,
+            slippageBps: slippage,
+          });
+
+          if (result.status === "complete") {
+            const out = BigInt(result.amountOut ?? "0");
+            totalRecovered += out;
+            successes++;
+            console.log(`    ✅ ${formatEther(out)} ETH recovered (tx: ${result.txHash?.slice(0, 14)}...)`);
+
+            recordTradePosition({
+              walletId: wallet.id,
+              coinAddress: coin,
+              isBuy: false,
+              ethAmountWei: out.toString(),
+              tokenAmount: balance.toString(),
+            });
+          } else {
+            failures++;
+            console.log(`    ❌ status: ${result.status}`);
+          }
+        } catch (err) {
+          failures++;
+          console.log(`    ❌ ${err instanceof Error ? err.message.slice(0, 120) : err}`);
+        }
+      }
+
+      console.log(`\nResults: ${successes} sold, ${failures} failed, ${skipped} skipped`);
+      console.log(`Total recovered: ${formatEther(totalRecovered)} ETH`);
       break;
     }
 
@@ -533,7 +601,7 @@ async function handleFleet(args: string[]): Promise<void> {
   fleet status <name> [--refresh]     — Show fleet status with positions/P&L
   fleet buy  <name> <coin>            — Buy coin with fleet wallets
         --amount-eth 0.01 [--slippage 500] [--over 10m] [--intervals N] [--no-jiggle]
-  fleet sell <name> <coin>            — Sell coin from fleet wallets
+  fleet sell <name> <coin>            — Sell ALL coins from fleet wallets [--slippage 500]
         --amount-eth 0.01 [--slippage 500] [--over 10m] [--intervals N] [--no-jiggle]
   fleet sweep <name>                  — Sweep ETH back
         [--to-fleet name | --to-address 0x...]`);
@@ -606,7 +674,7 @@ Fleet Commands:
   fleet create <name> --wallets N     — Create a fleet [--fund-eth] [--source-fleet] [--strategy]
   fleet status <name> [--refresh]     — Fleet status with positions/P&L
   fleet buy  <name> <coin>            — Buy with fleet [--amount-eth] [--slippage] [--over] [--intervals] [--no-jiggle]
-  fleet sell <name> <coin>            — Sell from fleet [--amount-eth] [--slippage] [--over] [--intervals] [--no-jiggle]
+  fleet sell <name> <coin>            — Sell ALL coins from fleet [--slippage 500]
   fleet sweep <name>                  — Sweep ETH [--to-fleet | --to-address]`);
     }
   } catch (err) {
