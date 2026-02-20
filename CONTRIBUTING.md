@@ -66,6 +66,36 @@ and returns funding address + deficit if insufficient.
 - **Tests are mandatory** — every new module gets unit tests; behavior changes update existing tests
 - Run `yarn test` before committing — all tests must pass
 
+### No Module-Scoped `process.env`
+
+**Never** read `process.env` at module scope as a constant:
+
+```ts
+// ❌ BAD — evaluated once at import time, untestable, order-dependent
+const CDP_MOCK_MODE = process.env.CDP_MOCK_MODE === "1";
+
+// ❌ BAD — same problem with destructuring
+const { SIGNER_BACKEND = "local" } = process.env;
+```
+
+**Always** use a function call so the value is read at call time:
+
+```ts
+// ✅ GOOD — evaluated when called, testable, no import-order issues
+function isMockMode(): boolean {
+  return process.env.CDP_MOCK_MODE === "1";
+}
+
+// ✅ GOOD — centralized config with validation
+function getSignerBackend(): "local" | "cdp" {
+  const raw = String(process.env.SIGNER_BACKEND ?? "local").trim().toLowerCase();
+  if (raw !== "local" && raw !== "cdp") throw new Error(`Unknown SIGNER_BACKEND: ${raw}`);
+  return raw;
+}
+```
+
+**Why:** Module-scoped env reads create hidden coupling to import order, break test isolation (vitest workers may import modules before `process.env` is set), and make config impossible to override at runtime. Prefer a centralized config module with validated accessor functions.
+
 ## PR Checklist (when applicable)
 
 - [ ] Conventional commit messages
