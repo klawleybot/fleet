@@ -21,6 +21,7 @@ import { getChainConfig } from "./network.js";
 import { loadBundlerConfigFromEnv } from "./bundler/config.js";
 import { getBundlerRouter } from "./bundler/index.js";
 import { resolveDeterministicBuyRoute, resolveDeterministicSellRoute } from "./swapRoute.js";
+import { resolveCoinRoute, type CoinRouteClient } from "./coinRoute.js";
 import { encodeV4ExactInSwap, getRouterAddress } from "./v4SwapEncoder.js";
 import { quoteExactInput, applySlippage } from "./v4Quoter.js";
 import { ensurePermit2Approval } from "./erc20.js";
@@ -530,48 +531,64 @@ export async function swapFromSmartAccount(input: {
     const fromNorm = input.fromToken.toLowerCase();
     const isSell = fromNorm !== root && fromNorm !== WETH;
 
-    const route = isSell
-      ? resolveDeterministicSellRoute({
-          fromToken: input.fromToken,
-          toToken: input.toToken,
-          maxHops: 3,
-        })
-      : resolveDeterministicBuyRoute({
-          fromToken: input.fromToken,
-          toToken: input.toToken,
-          maxHops: 3,
-        });
-
     const publicClient = createPublicClient({
       chain: chainCfg.chain,
       transport: http(chainCfg.rpcUrl),
     });
 
-    // Discover pool params if missing
-    if (!route.poolParams || route.poolParams.length === 0) {
-      // The coin is always last in buy route path, first in sell route path
-      const coinAddress = isSell ? route.path[0]! : route.path[route.path.length - 1]!;
-      // Only discover if the coin isn't root/WETH
-      if (coinAddress.toLowerCase() !== root && coinAddress.toLowerCase() !== WETH) {
-        try {
-          const params = await discoverPoolParams({
-            client: publicClient,
-            chainId: chainCfg.chainId,
-            coinAddress,
+    // Determine the coin address (the non-ETH/WETH token)
+    const coinAddress = isSell ? input.fromToken : input.toToken;
+
+    // Try on-chain route discovery first (coinRoute), fall back to env-var routing
+    let routePath: `0x${string}`[];
+    let routePoolParams: import("./swapRoute.js").HopPoolParams[] | undefined;
+
+    try {
+      const coinRoute = await resolveCoinRoute({
+        client: publicClient as unknown as CoinRouteClient,
+        coinAddress,
+      });
+      routePath = isSell ? coinRoute.sellPath : coinRoute.buyPath;
+      routePoolParams = isSell ? coinRoute.sellPoolParams : coinRoute.buyPoolParams;
+    } catch {
+      // Fall back to env-var-based deterministic routing
+      const route = isSell
+        ? resolveDeterministicSellRoute({
+            fromToken: input.fromToken,
+            toToken: input.toToken,
+            maxHops: 3,
+          })
+        : resolveDeterministicBuyRoute({
+            fromToken: input.fromToken,
+            toToken: input.toToken,
+            maxHops: 3,
           });
-          route.poolParams = Array.from({ length: route.hops }, () => params);
-        } catch {
-          // Fall through with no pool params — will use defaults
+      routePath = route.path;
+      routePoolParams = route.poolParams;
+
+      // Discover pool params if still missing
+      if (!routePoolParams || routePoolParams.length === 0) {
+        const target = isSell ? route.path[0]! : route.path[route.path.length - 1]!;
+        if (target.toLowerCase() !== root && target.toLowerCase() !== WETH) {
+          try {
+            const params = await discoverPoolParams({
+              client: publicClient,
+              chainId: chainCfg.chainId,
+              coinAddress: target,
+            });
+            routePoolParams = Array.from({ length: route.hops }, () => params);
+          } catch {
+            // Fall through with no pool params
+          }
         }
       }
     }
 
     // Map WETH→address(0) for native ETH handling
-    const swapPath = route.path.map((addr, idx) => {
+    const swapPath = routePath.map((addr, idx) => {
       if (addr.toLowerCase() !== WETH) return addr;
-      // For buys: first element (ETH in). For sells: last element (ETH out).
       if (!isSell && idx === 0) return "0x0000000000000000000000000000000000000000" as `0x${string}`;
-      if (isSell && idx === route.path.length - 1) return "0x0000000000000000000000000000000000000000" as `0x${string}`;
+      if (isSell && idx === routePath.length - 1) return "0x0000000000000000000000000000000000000000" as `0x${string}`;
       return addr;
     });
 
@@ -580,8 +597,8 @@ export async function swapFromSmartAccount(input: {
     const quote = await quoteExactInput({
       chainId: chainCfg.chainId,
       client: publicClient,
-      path: route.path,
-      poolParams: route.poolParams ?? [],
+      path: routePath,
+      poolParams: routePoolParams ?? [],
       amountIn: input.fromAmount,
       exactInput: true,
     });
@@ -592,7 +609,7 @@ export async function swapFromSmartAccount(input: {
       path: swapPath,
       amountIn: input.fromAmount,
       minAmountOut,
-      poolParamsPerHop: route.poolParams,
+      poolParamsPerHop: routePoolParams,
     });
 
     const calls: Array<{ to: `0x${string}`; value: bigint; data?: `0x${string}` }> = [];
