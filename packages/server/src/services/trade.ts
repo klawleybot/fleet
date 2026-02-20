@@ -1,7 +1,16 @@
 import pLimit from "p-limit";
 import { db } from "../db/index.js";
 import { swapFromSmartAccount } from "./cdp.js";
+import { recordTradePosition } from "./monitor.js";
 import type { StrategyMode, TradeRecord } from "../types.js";
+
+const NATIVE_ETH = "0x0000000000000000000000000000000000000000" as const;
+const WETH = "0x4200000000000000000000000000000000000006" as const;
+
+function isEthLike(addr: string): boolean {
+  const lower = addr.toLowerCase();
+  return lower === NATIVE_ETH || lower === WETH;
+}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -25,6 +34,7 @@ async function executeSingleSwap(input: {
   toToken: `0x${string}`;
   amountInWei: bigint;
   slippageBps: number;
+  operationId?: number | null;
 }): Promise<TradeRecord> {
   const wallet = db.getWalletById(input.walletId);
   if (!wallet) {
@@ -40,16 +50,37 @@ async function executeSingleSwap(input: {
       slippageBps: input.slippageBps,
     });
 
-    return db.createTrade({
+    const isComplete = result.status === "complete";
+    const trade = db.createTrade({
       walletId: wallet.id,
       fromToken: input.fromToken,
       toToken: input.toToken,
       amountIn: input.amountInWei.toString(),
+      amountOut: result.amountOut ?? null,
+      operationId: input.operationId ?? null,
       userOpHash: result.userOpHash,
       txHash: result.txHash,
-      status: result.status === "complete" ? "complete" : "failed",
-      errorMessage: result.status === "complete" ? null : `Status ${result.status}`,
+      status: isComplete ? "complete" : "failed",
+      errorMessage: isComplete ? null : `Status ${result.status}`,
     });
+
+    // Record position impact on successful trades
+    if (isComplete) {
+      const isBuy = isEthLike(input.fromToken);
+      const coinAddress = isBuy ? input.toToken : input.fromToken;
+      const ethAmount = input.amountInWei.toString();
+      const tokenAmount = result.amountOut ?? "0";
+
+      recordTradePosition({
+        walletId: wallet.id,
+        coinAddress,
+        isBuy,
+        ethAmountWei: isBuy ? ethAmount : tokenAmount,
+        tokenAmount: isBuy ? tokenAmount : ethAmount,
+      });
+    }
+
+    return trade;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown swap error";
     return db.createTrade({
@@ -57,6 +88,7 @@ async function executeSingleSwap(input: {
       fromToken: input.fromToken,
       toToken: input.toToken,
       amountIn: input.amountInWei.toString(),
+      operationId: input.operationId ?? null,
       userOpHash: null,
       txHash: null,
       status: "failed",
@@ -72,6 +104,7 @@ export async function coordinatedSwap(input: {
   amountInWei: bigint;
   slippageBps: number;
   concurrency?: number;
+  operationId?: number | null;
 }): Promise<TradeRecord[]> {
   if (input.walletIds.length === 0) {
     throw new Error("At least one wallet id is required.");
@@ -92,6 +125,7 @@ export async function coordinatedSwap(input: {
         toToken: input.toToken,
         amountInWei: input.amountInWei,
         slippageBps: input.slippageBps,
+        operationId: input.operationId,
       }),
     ),
   );
@@ -108,6 +142,7 @@ export async function strategySwap(input: {
   mode: StrategyMode;
   waveSize?: number;
   maxDelayMs?: number;
+  operationId?: number | null;
 }): Promise<TradeRecord[]> {
   if (!input.walletIds.length) throw new Error("At least one wallet id is required");
   if (input.totalAmountInWei <= 0n) throw new Error("totalAmountInWei must be > 0");
@@ -128,6 +163,7 @@ export async function strategySwap(input: {
       amountInWei: perWalletAmount,
       slippageBps: input.slippageBps,
       concurrency: Math.min(6, input.walletIds.length),
+      operationId: input.operationId,
     });
   }
 
@@ -148,6 +184,7 @@ export async function strategySwap(input: {
           toToken: input.toToken,
           amountInWei: perWalletAmount,
           slippageBps: input.slippageBps,
+          operationId: input.operationId,
         });
       }),
     );

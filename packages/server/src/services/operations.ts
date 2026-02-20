@@ -233,6 +233,7 @@ export async function approveAndExecuteOperation(input: {
             totalAmountInWei: totalAmountWei,
             slippageBps: payload.slippageBps,
             mode: payload.strategyMode,
+            operationId: operation.id,
           })
         : await strategySwap({
             walletIds,
@@ -241,6 +242,7 @@ export async function approveAndExecuteOperation(input: {
             totalAmountInWei: totalAmountWei,
             slippageBps: payload.slippageBps,
             mode: payload.strategyMode,
+            operationId: operation.id,
           });
 
     return db.updateOperation({

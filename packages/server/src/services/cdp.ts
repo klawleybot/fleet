@@ -511,7 +511,7 @@ export async function swapFromSmartAccount(input: {
   fromAmount: bigint;
   slippageBps: number;
   network?: SupportedNetwork;
-}): Promise<{ userOpHash: `0x${string}`; txHash: `0x${string}` | null; status: string }> {
+}): Promise<{ userOpHash: `0x${string}`; txHash: `0x${string}` | null; status: string; amountOut?: string }> {
   if (CDP_MOCK_MODE) {
     if (!isAddress(input.fromToken) || !isAddress(input.toToken)) {
       throw new Error("Invalid token addresses for mock swap");
@@ -613,10 +613,11 @@ export async function swapFromSmartAccount(input: {
 
     calls.push({ to: encoded.to, value: encoded.value, data: encoded.data });
 
-    return submitUserOperationViaRouter({
+    const opResult = await submitUserOperationViaRouter({
       smartAccountName: input.smartAccountName,
       calls,
     });
+    return { ...opResult, amountOut: quote.amountOut.toString() };
   }
 
   const owner = await getOwnerAccountInternal();
