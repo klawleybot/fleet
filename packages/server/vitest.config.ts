@@ -12,6 +12,7 @@ export default defineConfig({
       // Default to mock mode for unit tests that import services directly.
       // E2E tests that spawn child processes set their own env.
       CDP_MOCK_MODE: "1",
+      SQLITE_PATH: ".data/pump-it-up-test.db",
     },
   },
 });

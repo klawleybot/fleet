@@ -191,12 +191,25 @@ function mapOperation(row: OperationRow): OperationRecord {
   };
 }
 
-const dbDirectory = path.resolve(process.cwd(), ".data");
-fs.mkdirSync(dbDirectory, { recursive: true });
-const dbPath = process.env.SQLITE_PATH ?? path.resolve(dbDirectory, "pump-it-up.db");
+let _sqlite: Database.Database | null = null;
 
-const sqlite = new Database(dbPath);
-runMigrations(sqlite);
+function getSqlite(): Database.Database {
+  if (_sqlite) return _sqlite;
+  const dbPath = process.env.SQLITE_PATH ?? path.resolve(process.cwd(), ".data", "pump-it-up.db");
+  const dbDirectory = path.dirname(dbPath);
+  fs.mkdirSync(dbDirectory, { recursive: true });
+  _sqlite = new Database(dbPath);
+  runMigrations(_sqlite);
+  return _sqlite;
+}
+
+/** Reset the DB connection (for test isolation). Closes existing connection. */
+export function resetDb() {
+  if (_sqlite) {
+    _sqlite.close();
+    _sqlite = null;
+  }
+}
 
 export const db = {
   createWallet(input: {
@@ -207,7 +220,7 @@ export const db = {
     type: "smart";
     isMaster: boolean;
   }): WalletRecord {
-    const result = sqlite
+    const result = getSqlite()
       .prepare(
         `INSERT INTO wallets (name, address, cdp_account_name, owner_address, type, is_master)
          VALUES (@name, @address, @cdp_account_name, @owner_address, @type, @is_master)`,
@@ -221,35 +234,35 @@ export const db = {
         is_master: input.isMaster ? 1 : 0,
       });
 
-    const row = sqlite
+    const row = getSqlite()
       .prepare("SELECT * FROM wallets WHERE id = ?")
       .get(result.lastInsertRowid) as WalletRow;
     return mapWallet(row);
   },
 
   getWalletById(id: number): WalletRecord | null {
-    const row = sqlite.prepare("SELECT * FROM wallets WHERE id = ?").get(id) as
+    const row = getSqlite().prepare("SELECT * FROM wallets WHERE id = ?").get(id) as
       | WalletRow
       | undefined;
     return row ? mapWallet(row) : null;
   },
 
   getWalletByName(name: string): WalletRecord | null {
-    const row = sqlite.prepare("SELECT * FROM wallets WHERE name = ?").get(name) as
+    const row = getSqlite().prepare("SELECT * FROM wallets WHERE name = ?").get(name) as
       | WalletRow
       | undefined;
     return row ? mapWallet(row) : null;
   },
 
   getMasterWallet(): WalletRecord | null {
-    const row = sqlite
+    const row = getSqlite()
       .prepare("SELECT * FROM wallets WHERE is_master = 1 LIMIT 1")
       .get() as WalletRow | undefined;
     return row ? mapWallet(row) : null;
   },
 
   listWallets(): WalletRecord[] {
-    const rows = sqlite
+    const rows = getSqlite()
       .prepare("SELECT * FROM wallets ORDER BY id ASC")
       .all() as WalletRow[];
     return rows.map(mapWallet);
@@ -267,7 +280,7 @@ export const db = {
     status: TradeStatus;
     errorMessage: string | null;
   }): TradeRecord {
-    const result = sqlite
+    const result = getSqlite()
       .prepare(
         `INSERT INTO trades (wallet_id, from_token, to_token, amount_in, amount_out, operation_id, user_op_hash, tx_hash, status, error_message)
          VALUES (@wallet_id, @from_token, @to_token, @amount_in, @amount_out, @operation_id, @user_op_hash, @tx_hash, @status, @error_message)`,
@@ -285,20 +298,20 @@ export const db = {
         error_message: input.errorMessage,
       });
 
-    const row = sqlite
+    const row = getSqlite()
       .prepare("SELECT * FROM trades WHERE id = ?")
       .get(result.lastInsertRowid) as TradeRow;
     return mapTrade(row);
   },
 
   updateTradeAmountOut(tradeId: number, amountOut: string): void {
-    sqlite
+    getSqlite()
       .prepare("UPDATE trades SET amount_out = ? WHERE id = ?")
       .run(amountOut, tradeId);
   },
 
   listTrades(): TradeRecord[] {
-    const rows = sqlite
+    const rows = getSqlite()
       .prepare("SELECT * FROM trades ORDER BY id DESC")
       .all() as TradeRow[];
     return rows.map(mapTrade);
@@ -313,7 +326,7 @@ export const db = {
     status: FundingStatus;
     errorMessage: string | null;
   }): FundingRecord {
-    const result = sqlite
+    const result = getSqlite()
       .prepare(
         `INSERT INTO funding_txs (from_wallet_id, to_wallet_id, amount_wei, user_op_hash, tx_hash, status, error_message)
          VALUES (@from_wallet_id, @to_wallet_id, @amount_wei, @user_op_hash, @tx_hash, @status, @error_message)`,
@@ -328,47 +341,47 @@ export const db = {
         error_message: input.errorMessage,
       });
 
-    const row = sqlite
+    const row = getSqlite()
       .prepare("SELECT * FROM funding_txs WHERE id = ?")
       .get(result.lastInsertRowid) as FundingRow;
     return mapFunding(row);
   },
 
   listFunding(): FundingRecord[] {
-    const rows = sqlite
+    const rows = getSqlite()
       .prepare("SELECT * FROM funding_txs ORDER BY id DESC")
       .all() as FundingRow[];
     return rows.map(mapFunding);
   },
 
   createCluster(input: { name: string; strategyMode: StrategyMode }): ClusterRecord {
-    const result = sqlite
+    const result = getSqlite()
       .prepare(`INSERT INTO clusters (name, strategy_mode) VALUES (@name, @strategy_mode)`)
       .run({ name: input.name, strategy_mode: input.strategyMode });
-    const row = sqlite.prepare("SELECT * FROM clusters WHERE id = ?").get(result.lastInsertRowid) as ClusterRow;
+    const row = getSqlite().prepare("SELECT * FROM clusters WHERE id = ?").get(result.lastInsertRowid) as ClusterRow;
     return mapCluster(row);
   },
 
   getClusterById(id: number): ClusterRecord | null {
-    const row = sqlite.prepare("SELECT * FROM clusters WHERE id = ?").get(id) as ClusterRow | undefined;
+    const row = getSqlite().prepare("SELECT * FROM clusters WHERE id = ?").get(id) as ClusterRow | undefined;
     return row ? mapCluster(row) : null;
   },
 
   getClusterByName(name: string): ClusterRecord | null {
-    const row = sqlite.prepare("SELECT * FROM clusters WHERE name = ?").get(name) as ClusterRow | undefined;
+    const row = getSqlite().prepare("SELECT * FROM clusters WHERE name = ?").get(name) as ClusterRow | undefined;
     return row ? mapCluster(row) : null;
   },
 
   listClusters(): ClusterRecord[] {
-    const rows = sqlite.prepare("SELECT * FROM clusters ORDER BY id ASC").all() as ClusterRow[];
+    const rows = getSqlite().prepare("SELECT * FROM clusters ORDER BY id ASC").all() as ClusterRow[];
     return rows.map(mapCluster);
   },
 
   setClusterWallets(clusterId: number, walletIds: number[]): ClusterWalletRecord[] {
     const uniqueWalletIds = [...new Set(walletIds)];
-    const tx = sqlite.transaction((ids: number[]) => {
-      sqlite.prepare("DELETE FROM cluster_wallets WHERE cluster_id = ?").run(clusterId);
-      const insert = sqlite.prepare(`
+    const tx = getSqlite().transaction((ids: number[]) => {
+      getSqlite().prepare("DELETE FROM cluster_wallets WHERE cluster_id = ?").run(clusterId);
+      const insert = getSqlite().prepare(`
         INSERT INTO cluster_wallets (cluster_id, wallet_id, enabled, weight)
         VALUES (?, ?, 1, 1)
       `);
@@ -378,21 +391,21 @@ export const db = {
     });
     tx(uniqueWalletIds);
 
-    const rows = sqlite
+    const rows = getSqlite()
       .prepare("SELECT * FROM cluster_wallets WHERE cluster_id = ? ORDER BY wallet_id ASC")
       .all(clusterId) as ClusterWalletRow[];
     return rows.map(mapClusterWallet);
   },
 
   listClusterWallets(clusterId: number): ClusterWalletRecord[] {
-    const rows = sqlite
+    const rows = getSqlite()
       .prepare("SELECT * FROM cluster_wallets WHERE cluster_id = ? ORDER BY wallet_id ASC")
       .all(clusterId) as ClusterWalletRow[];
     return rows.map(mapClusterWallet);
   },
 
   listClusterWalletDetails(clusterId: number): WalletRecord[] {
-    const rows = sqlite
+    const rows = getSqlite()
       .prepare(`
         SELECT w.*
         FROM cluster_wallets cw
@@ -414,7 +427,7 @@ export const db = {
     resultJson?: string | null;
     errorMessage?: string | null;
   }): OperationRecord {
-    const result = sqlite
+    const result = getSqlite()
       .prepare(`
         INSERT INTO operations (type, cluster_id, status, requested_by, approved_by, payload_json, result_json, error_message, updated_at)
         VALUES (@type, @cluster_id, @status, @requested_by, @approved_by, @payload_json, @result_json, @error_message, CURRENT_TIMESTAMP)
@@ -430,12 +443,12 @@ export const db = {
         error_message: input.errorMessage ?? null,
       });
 
-    const row = sqlite.prepare("SELECT * FROM operations WHERE id = ?").get(result.lastInsertRowid) as OperationRow;
+    const row = getSqlite().prepare("SELECT * FROM operations WHERE id = ?").get(result.lastInsertRowid) as OperationRow;
     return mapOperation(row);
   },
 
   getOperationById(id: number): OperationRecord | null {
-    const row = sqlite.prepare("SELECT * FROM operations WHERE id = ?").get(id) as OperationRow | undefined;
+    const row = getSqlite().prepare("SELECT * FROM operations WHERE id = ?").get(id) as OperationRow | undefined;
     return row ? mapOperation(row) : null;
   },
 
@@ -447,10 +460,10 @@ export const db = {
     resultJson?: string | null;
     errorMessage?: string | null;
   }): OperationRecord {
-    const current = sqlite.prepare("SELECT * FROM operations WHERE id = ?").get(input.id) as OperationRow | undefined;
+    const current = getSqlite().prepare("SELECT * FROM operations WHERE id = ?").get(input.id) as OperationRow | undefined;
     if (!current) throw new Error(`Operation ${input.id} not found`);
 
-    sqlite
+    getSqlite()
       .prepare(`
         UPDATE operations
         SET status = @status,
@@ -470,12 +483,12 @@ export const db = {
         error_message: input.errorMessage ?? current.error_message,
       });
 
-    const row = sqlite.prepare("SELECT * FROM operations WHERE id = ?").get(input.id) as OperationRow;
+    const row = getSqlite().prepare("SELECT * FROM operations WHERE id = ?").get(input.id) as OperationRow;
     return mapOperation(row);
   },
 
   hasOpenOperationForCluster(clusterId: number): boolean {
-    const row = sqlite
+    const row = getSqlite()
       .prepare(`
         SELECT 1 AS ok
         FROM operations
@@ -488,14 +501,14 @@ export const db = {
   },
 
   listOperationsByStatus(status: OperationStatus, limit = 100): OperationRecord[] {
-    const rows = sqlite
+    const rows = getSqlite()
       .prepare("SELECT * FROM operations WHERE status = ? ORDER BY id ASC LIMIT ?")
       .all(status, limit) as OperationRow[];
     return rows.map(mapOperation);
   },
 
   getLatestClusterOperationAgeSec(clusterId: number, excludeOperationId?: number): number | null {
-    const row = sqlite
+    const row = getSqlite()
       .prepare(`
         SELECT CAST((strftime('%s','now') - strftime('%s', updated_at)) AS INTEGER) AS age_sec
         FROM operations
@@ -511,7 +524,7 @@ export const db = {
   },
 
   listOperations(limit = 100): OperationRecord[] {
-    const rows = sqlite
+    const rows = getSqlite()
       .prepare("SELECT * FROM operations ORDER BY id DESC LIMIT ?")
       .all(limit) as OperationRow[];
     return rows.map(mapOperation);
@@ -528,12 +541,12 @@ export const db = {
     isBuy: boolean;
   }): PositionRecord {
     const coin = input.coinAddress.toLowerCase();
-    const existing = sqlite
+    const existing = getSqlite()
       .prepare("SELECT * FROM positions WHERE wallet_id = ? AND coin_address = ?")
       .get(input.walletId, coin) as PositionRow | undefined;
 
     if (!existing) {
-      sqlite
+      getSqlite()
         .prepare(`
           INSERT INTO positions (wallet_id, coin_address, total_cost_wei, total_received_wei, holdings_raw, realized_pnl_wei, buy_count, sell_count, last_action_at)
           VALUES (?, ?, ?, ?, ?, '0', ?, ?, CURRENT_TIMESTAMP)
@@ -555,7 +568,7 @@ export const db = {
       const newBuy = existing.buy_count + (input.isBuy ? 1 : 0);
       const newSell = existing.sell_count + (input.isBuy ? 0 : 1);
 
-      sqlite
+      getSqlite()
         .prepare(`
           UPDATE positions
           SET total_cost_wei = ?, total_received_wei = ?, holdings_raw = ?,
@@ -565,35 +578,35 @@ export const db = {
         .run(newCost, newReceived, newHoldings, newBuy, newSell, input.walletId, coin);
     }
 
-    const row = sqlite
+    const row = getSqlite()
       .prepare("SELECT * FROM positions WHERE wallet_id = ? AND coin_address = ?")
       .get(input.walletId, coin) as PositionRow;
     return mapPosition(row);
   },
 
   getPosition(walletId: number, coinAddress: `0x${string}`): PositionRecord | null {
-    const row = sqlite
+    const row = getSqlite()
       .prepare("SELECT * FROM positions WHERE wallet_id = ? AND coin_address = ?")
       .get(walletId, coinAddress.toLowerCase()) as PositionRow | undefined;
     return row ? mapPosition(row) : null;
   },
 
   listPositionsByWallet(walletId: number): PositionRecord[] {
-    const rows = sqlite
+    const rows = getSqlite()
       .prepare("SELECT * FROM positions WHERE wallet_id = ? ORDER BY last_action_at DESC")
       .all(walletId) as PositionRow[];
     return rows.map(mapPosition);
   },
 
   listPositionsByCoin(coinAddress: `0x${string}`): PositionRecord[] {
-    const rows = sqlite
+    const rows = getSqlite()
       .prepare("SELECT * FROM positions WHERE coin_address = ? ORDER BY wallet_id ASC")
       .all(coinAddress.toLowerCase()) as PositionRow[];
     return rows.map(mapPosition);
   },
 
   listPositionsByCluster(clusterId: number): PositionRecord[] {
-    const rows = sqlite
+    const rows = getSqlite()
       .prepare(`
         SELECT p.*
         FROM positions p
@@ -606,7 +619,7 @@ export const db = {
   },
 
   listAllPositions(): PositionRecord[] {
-    const rows = sqlite
+    const rows = getSqlite()
       .prepare("SELECT * FROM positions ORDER BY last_action_at DESC")
       .all() as PositionRow[];
     return rows.map(mapPosition);
