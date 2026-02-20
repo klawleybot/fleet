@@ -11,6 +11,7 @@ import express from "express";
 import type { NextFunction, Request, Response } from "express";
 import { autonomyRouter } from "./routes/autonomy.js";
 import { clustersRouter } from "./routes/clusters.js";
+import { dashboardRouter } from "./routes/dashboard.js";
 import { fleetsRouter } from "./routes/fleets.js";
 import { fundingRouter } from "./routes/funding.js";
 import { operationsRouter } from "./routes/operations.js";
@@ -35,6 +36,7 @@ app.use("/clusters", clustersRouter);
 app.use("/fleets", fleetsRouter);
 app.use("/operations", operationsRouter);
 app.use("/positions", positionsRouter);
+app.use("/dashboard", dashboardRouter);
 app.use("/autonomy", autonomyRouter);
 
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
