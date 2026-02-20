@@ -320,6 +320,9 @@ export function buildDripSchedule(params: {
  * Each wallet makes `intervals` sub-trades at randomized times within the duration.
  * Supports jiggle on sub-trade amounts.
  */
+/** Default gas reserve per wallet for sells (0.0005 ETH covers ~1-2 UserOps on Base). */
+export const DEFAULT_GAS_RESERVE_WEI = 500_000_000_000_000n; // 0.0005 ETH
+
 export async function dripSwap(input: {
   walletIds: number[];
   fromToken: `0x${string}`;
@@ -332,6 +335,8 @@ export async function dripSwap(input: {
   jiggle?: boolean;
   jiggleFactor?: number;
   operationId?: number | null;
+  /** Per-wallet gas reserve subtracted from buy amount (default 0.0005 ETH). Set 0n to disable. */
+  gasReservePerWallet?: bigint;
 }): Promise<TradeRecord[]> {
   const walletCount = input.walletIds.length;
   const durationMs = Math.max(1000, input.durationMs);
@@ -340,11 +345,25 @@ export async function dripSwap(input: {
   const autoIntervals = Math.max(2, Math.min(20, Math.floor(durationMs / 30_000)));
   const intervals = input.intervals ?? autoIntervals;
 
-  // Distribute total across wallets (with outer jiggle)
+  // Subtract gas reserve from total (for buys, ensures ETH left for future sells)
+  const gasReserve = input.gasReservePerWallet ?? DEFAULT_GAS_RESERVE_WEI;
+  const totalGasReserve = gasReserve * BigInt(walletCount);
+  const effectiveTotal = input.totalAmountInWei > totalGasReserve
+    ? input.totalAmountInWei - totalGasReserve
+    : input.totalAmountInWei; // don't go negative; caller should have checked
+
+  if (gasReserve > 0n && effectiveTotal < input.totalAmountInWei) {
+    const reservedEth = Number(totalGasReserve) / 1e18;
+    const effectiveEth = Number(effectiveTotal) / 1e18;
+    console.log(`  Gas reserve: ${reservedEth.toFixed(4)} ETH (${walletCount} × ${(Number(gasReserve) / 1e18).toFixed(4)})`);
+    console.log(`  Effective buy: ${effectiveEth.toFixed(4)} ETH`);
+  }
+
+  // Distribute effective total across wallets (with outer jiggle)
   const walletAmounts = input.jiggle !== false
-    ? jiggleAmounts(input.totalAmountInWei, walletCount, input.jiggleFactor ?? 0.15)
+    ? jiggleAmounts(effectiveTotal, walletCount, input.jiggleFactor ?? 0.15)
     : Array.from({ length: walletCount }, () =>
-        input.totalAmountInWei / BigInt(walletCount),
+        effectiveTotal / BigInt(walletCount),
       );
 
   const schedule = buildDripSchedule({
