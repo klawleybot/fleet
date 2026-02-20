@@ -16,6 +16,42 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// ---------------------------------------------------------------------------
+// Jiggle — randomize per-wallet amounts while preserving total
+// ---------------------------------------------------------------------------
+
+/**
+ * Distribute `total` across `count` wallets with ±factor random variance.
+ * The sum of returned amounts always equals `total`.
+ *
+ * @param total - Total amount to distribute
+ * @param count - Number of wallets
+ * @param factor - Variance factor (0.15 = ±15%). Default 0.15.
+ */
+export function jiggleAmounts(total: bigint, count: number, factor = 0.15): bigint[] {
+  if (count <= 0) throw new Error("count must be > 0");
+  if (count === 1) return [total];
+
+  const base = Number(total) / count;
+  // Generate random multipliers in [1-factor, 1+factor]
+  const multipliers = Array.from({ length: count }, () =>
+    1 - factor + Math.random() * 2 * factor,
+  );
+
+  // Normalize so multipliers sum to `count` (preserves total)
+  const mulSum = multipliers.reduce((a, b) => a + b, 0);
+  const normalized = multipliers.map((m) => (m / mulSum) * count);
+
+  // Convert to bigints
+  const amounts = normalized.map((m) => BigInt(Math.floor(base * m)));
+
+  // Fix rounding: add remainder to the last wallet
+  const allocated = amounts.reduce((a, b) => a + b, 0n);
+  amounts[amounts.length - 1]! += total - allocated;
+
+  return amounts;
+}
+
 function shuffle<T>(items: T[]): T[] {
   const next = [...items];
   for (let i = next.length - 1; i > 0; i -= 1) {
@@ -101,7 +137,10 @@ export async function coordinatedSwap(input: {
   walletIds: number[];
   fromToken: `0x${string}`;
   toToken: `0x${string}`;
+  /** Single amount applied to all wallets (ignored if amountsPerWallet provided) */
   amountInWei: bigint;
+  /** Per-wallet amounts (overrides amountInWei). Must match walletIds length. */
+  amountsPerWallet?: bigint[];
   slippageBps: number;
   concurrency?: number;
   operationId?: number | null;
@@ -109,21 +148,23 @@ export async function coordinatedSwap(input: {
   if (input.walletIds.length === 0) {
     throw new Error("At least one wallet id is required.");
   }
-  if (input.amountInWei <= 0n) {
-    throw new Error("amountInWei must be greater than 0.");
-  }
   if (input.slippageBps < 1 || input.slippageBps > 2_000) {
     throw new Error("slippageBps must be between 1 and 2000.");
   }
 
+  const amounts = input.amountsPerWallet ?? input.walletIds.map(() => input.amountInWei);
+  if (amounts.length !== input.walletIds.length) {
+    throw new Error("amountsPerWallet length must match walletIds length");
+  }
+
   const limiter = pLimit(input.concurrency ?? 3);
-  const tasks = input.walletIds.map((walletId) =>
+  const tasks = input.walletIds.map((walletId, idx) =>
     limiter(() =>
       executeSingleSwap({
         walletId,
         fromToken: input.fromToken,
         toToken: input.toToken,
-        amountInWei: input.amountInWei,
+        amountInWei: amounts[idx]!,
         slippageBps: input.slippageBps,
         operationId: input.operationId,
       }),
@@ -143,6 +184,10 @@ export async function strategySwap(input: {
   waveSize?: number;
   maxDelayMs?: number;
   operationId?: number | null;
+  /** Enable amount jiggle (default true). Set false for exact equal splits. */
+  jiggle?: boolean;
+  /** Jiggle variance factor (default 0.15 = ±15%). */
+  jiggleFactor?: number;
 }): Promise<TradeRecord[]> {
   if (!input.walletIds.length) throw new Error("At least one wallet id is required");
   if (input.totalAmountInWei <= 0n) throw new Error("totalAmountInWei must be > 0");
@@ -150,8 +195,14 @@ export async function strategySwap(input: {
     throw new Error("slippageBps must be between 1 and 2000.");
   }
 
-  const perWalletAmount = input.totalAmountInWei / BigInt(input.walletIds.length);
-  if (perWalletAmount <= 0n) {
+  const walletCount = input.walletIds.length;
+  const useJiggle = input.jiggle !== false; // default on
+  const amounts = useJiggle
+    ? jiggleAmounts(input.totalAmountInWei, walletCount, input.jiggleFactor ?? 0.15)
+    : Array.from({ length: walletCount }, () => input.totalAmountInWei / BigInt(walletCount));
+
+  // Verify no zero amounts
+  if (amounts.some((a) => a <= 0n)) {
     throw new Error("totalAmountInWei is too small for the selected wallet count");
   }
 
@@ -160,29 +211,33 @@ export async function strategySwap(input: {
       walletIds: input.walletIds,
       fromToken: input.fromToken,
       toToken: input.toToken,
-      amountInWei: perWalletAmount,
+      amountInWei: 0n, // ignored when amountsPerWallet provided
+      amountsPerWallet: amounts,
       slippageBps: input.slippageBps,
-      concurrency: Math.min(6, input.walletIds.length),
+      concurrency: Math.min(6, walletCount),
       operationId: input.operationId,
     });
   }
 
   const ordered = shuffle(input.walletIds);
+  // Re-shuffle amounts to match shuffled wallet order
+  const shuffledAmounts = ordered.map((_, idx) => amounts[idx]!);
   const waveSize = Math.max(1, Math.min(10, input.waveSize ?? 3));
   const maxDelayMs = Math.max(100, input.maxDelayMs ?? 4000);
 
   const results: TradeRecord[] = [];
   for (let i = 0; i < ordered.length; i += waveSize) {
     const wave = ordered.slice(i, i + waveSize);
+    const waveAmounts = shuffledAmounts.slice(i, i + waveSize);
     const waveResults = await Promise.all(
-      wave.map(async (walletId) => {
+      wave.map(async (walletId, idx) => {
         const jitter = Math.floor(Math.random() * maxDelayMs);
         await sleep(jitter);
         return executeSingleSwap({
           walletId,
           fromToken: input.fromToken,
           toToken: input.toToken,
-          amountInWei: perWalletAmount,
+          amountInWei: waveAmounts[idx]!,
           slippageBps: input.slippageBps,
           operationId: input.operationId,
         });
