@@ -11,7 +11,9 @@ import {
   requestExitCoinOperation,
   approveAndExecuteOperation,
 } from "../services/operations.js";
-import { isAddress } from "viem";
+import { dripSwap } from "../services/trade.js";
+import { db } from "../db/index.js";
+import { isAddress, parseEther } from "viem";
 
 export const fleetsRouter = Router();
 
@@ -79,10 +81,14 @@ fleetsRouter.post("/:name/buy", async (req, res) => {
     return res.status(404).json({ error: "Fleet not found" });
   }
 
-  const { coinAddress, totalAmountWei, slippageBps } = req.body as {
+  const { coinAddress, totalAmountWei, slippageBps, overMs, intervals, jiggle, jiggleFactor } = req.body as {
     coinAddress?: string;
     totalAmountWei?: string;
     slippageBps?: number;
+    overMs?: number;
+    intervals?: number;
+    jiggle?: boolean;
+    jiggleFactor?: number;
   };
 
   if (!coinAddress || !isAddress(coinAddress)) {
@@ -96,6 +102,23 @@ fleetsRouter.post("/:name/buy", async (req, res) => {
   }
 
   try {
+    // Temporal streaming: use dripSwap when overMs is set
+    if (overMs && overMs > 0) {
+      const walletIds = fleet.wallets.map((w) => w.id);
+      const trades = await dripSwap({
+        walletIds,
+        fromToken: "0x4200000000000000000000000000000000000006",
+        toToken: coinAddress as `0x${string}`,
+        totalAmountInWei: BigInt(totalAmountWei),
+        slippageBps: slippageBps!,
+        durationMs: overMs,
+        intervals,
+        jiggle,
+        jiggleFactor,
+      });
+      return res.json({ mode: "drip", durationMs: overMs, tradeCount: trades.length, trades });
+    }
+
     const op = requestSupportCoinOperation({
       clusterId: fleet.clusterId,
       coinAddress: coinAddress as `0x${string}`,
@@ -122,10 +145,14 @@ fleetsRouter.post("/:name/sell", async (req, res) => {
     return res.status(404).json({ error: "Fleet not found" });
   }
 
-  const { coinAddress, totalAmountWei, slippageBps } = req.body as {
+  const { coinAddress, totalAmountWei, slippageBps, overMs, intervals, jiggle, jiggleFactor } = req.body as {
     coinAddress?: string;
     totalAmountWei?: string;
     slippageBps?: number;
+    overMs?: number;
+    intervals?: number;
+    jiggle?: boolean;
+    jiggleFactor?: number;
   };
 
   if (!coinAddress || !isAddress(coinAddress)) {
@@ -139,6 +166,22 @@ fleetsRouter.post("/:name/sell", async (req, res) => {
   }
 
   try {
+    if (overMs && overMs > 0) {
+      const walletIds = fleet.wallets.map((w) => w.id);
+      const trades = await dripSwap({
+        walletIds,
+        fromToken: coinAddress as `0x${string}`,
+        toToken: "0x4200000000000000000000000000000000000006",
+        totalAmountInWei: BigInt(totalAmountWei),
+        slippageBps: slippageBps!,
+        durationMs: overMs,
+        intervals,
+        jiggle,
+        jiggleFactor,
+      });
+      return res.json({ mode: "drip", durationMs: overMs, tradeCount: trades.length, trades });
+    }
+
     const op = requestExitCoinOperation({
       clusterId: fleet.clusterId,
       coinAddress: coinAddress as `0x${string}`,

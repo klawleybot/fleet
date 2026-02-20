@@ -249,6 +249,138 @@ export async function strategySwap(input: {
   return results;
 }
 
+// ---------------------------------------------------------------------------
+// Temporal Streaming (drip) — spread buys/sells over time
+// ---------------------------------------------------------------------------
+
+/**
+ * Schedule for a single drip event: which wallet, how much, when.
+ */
+interface DripEvent {
+  walletId: number;
+  amount: bigint;
+  /** Delay from operation start in ms */
+  delayMs: number;
+}
+
+/**
+ * Build a drip schedule: distribute each wallet's total amount into
+ * `intervals` sub-trades spread over `durationMs` with randomized timing.
+ */
+export function buildDripSchedule(params: {
+  walletIds: number[];
+  amounts: bigint[];
+  durationMs: number;
+  intervals: number;
+  jiggle?: boolean;
+  jiggleFactor?: number;
+}): DripEvent[] {
+  const { walletIds, amounts, durationMs, intervals } = params;
+  const useJiggle = params.jiggle !== false;
+  const factor = params.jiggleFactor ?? 0.1;
+
+  const events: DripEvent[] = [];
+
+  for (let w = 0; w < walletIds.length; w++) {
+    const walletId = walletIds[w]!;
+    const walletTotal = amounts[w]!;
+
+    // Split wallet's amount into intervals
+    const subAmounts = useJiggle
+      ? jiggleAmounts(walletTotal, intervals, factor)
+      : Array.from({ length: intervals }, (_, i) => {
+          const base = walletTotal / BigInt(intervals);
+          return i === intervals - 1
+            ? walletTotal - base * BigInt(intervals - 1)
+            : base;
+        });
+
+    for (let i = 0; i < intervals; i++) {
+      // Spread evenly with random jitter within each time slot
+      const slotStart = (durationMs / intervals) * i;
+      const slotEnd = (durationMs / intervals) * (i + 1);
+      const delayMs = Math.floor(slotStart + Math.random() * (slotEnd - slotStart));
+
+      events.push({
+        walletId,
+        amount: subAmounts[i]!,
+        delayMs,
+      });
+    }
+  }
+
+  // Sort by delay so we execute in chronological order
+  events.sort((a, b) => a.delayMs - b.delayMs);
+  return events;
+}
+
+/**
+ * Execute a drip (temporal streaming) swap — buys/sells spread over durationMs.
+ *
+ * Each wallet makes `intervals` sub-trades at randomized times within the duration.
+ * Supports jiggle on sub-trade amounts.
+ */
+export async function dripSwap(input: {
+  walletIds: number[];
+  fromToken: `0x${string}`;
+  toToken: `0x${string}`;
+  totalAmountInWei: bigint;
+  slippageBps: number;
+  durationMs: number;
+  /** Number of sub-trades per wallet (default: auto-calculated) */
+  intervals?: number;
+  jiggle?: boolean;
+  jiggleFactor?: number;
+  operationId?: number | null;
+}): Promise<TradeRecord[]> {
+  const walletCount = input.walletIds.length;
+  const durationMs = Math.max(1000, input.durationMs);
+
+  // Default intervals: ~1 per 30 seconds, min 2, max 20
+  const autoIntervals = Math.max(2, Math.min(20, Math.floor(durationMs / 30_000)));
+  const intervals = input.intervals ?? autoIntervals;
+
+  // Distribute total across wallets (with outer jiggle)
+  const walletAmounts = input.jiggle !== false
+    ? jiggleAmounts(input.totalAmountInWei, walletCount, input.jiggleFactor ?? 0.15)
+    : Array.from({ length: walletCount }, () =>
+        input.totalAmountInWei / BigInt(walletCount),
+      );
+
+  const schedule = buildDripSchedule({
+    walletIds: input.walletIds,
+    amounts: walletAmounts,
+    durationMs,
+    intervals,
+    jiggle: input.jiggle,
+    jiggleFactor: input.jiggleFactor ?? 0.1, // tighter jiggle on sub-trades
+  });
+
+  const results: TradeRecord[] = [];
+  const startTime = Date.now();
+
+  for (const event of schedule) {
+    // Wait until it's time for this event
+    const elapsed = Date.now() - startTime;
+    const waitMs = event.delayMs - elapsed;
+    if (waitMs > 0) {
+      await sleep(waitMs);
+    }
+
+    const result = await executeSingleSwap({
+      walletId: event.walletId,
+      fromToken: input.fromToken,
+      toToken: input.toToken,
+      amountInWei: event.amount,
+      slippageBps: input.slippageBps,
+      operationId: input.operationId,
+    });
+    results.push(result);
+  }
+
+  return results;
+}
+
 export function listTradeHistory(): TradeRecord[] {
   return db.listTrades();
 }
