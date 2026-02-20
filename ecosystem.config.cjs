@@ -9,8 +9,15 @@ module.exports = {
     time: true,
     autorestart: true,
     max_restarts: 10,
+    min_uptime: "10s",
+    kill_timeout: 5000,
     env: {
       NODE_ENV: "production",
+      SIGNER_BACKEND: "local",
+      CDP_MOCK_MODE: "0",
+      APP_NETWORK: "base",
+      PORT: "4020",
+      FLEET_KILL_SWITCH: "false",
     },
   }],
 };
