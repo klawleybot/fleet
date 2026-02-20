@@ -8,5 +8,10 @@ export default defineConfig({
     fileParallelism: false,
     testTimeout: 60_000,
     hookTimeout: 60_000,
+    env: {
+      // Default to mock mode for unit tests that import services directly.
+      // E2E tests that spawn child processes set their own env.
+      CDP_MOCK_MODE: "1",
+    },
   },
 });

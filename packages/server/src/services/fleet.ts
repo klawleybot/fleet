@@ -15,6 +15,7 @@
 import { createPublicClient, http, formatEther, type Address } from "viem";
 import { db } from "../db/index.js";
 import type { ClusterRecord, WalletRecord } from "../types.js";
+import { transferFromSmartAccount } from "./cdp.js";
 import { createFleetWallets, ensureMasterWallet } from "./wallet.js";
 import {
   requestFundingOperation,
@@ -275,50 +276,130 @@ export function listFleets(): FleetInfo[] {
 }
 
 // ---------------------------------------------------------------------------
-// Sweep — move all ETH from one fleet's wallets into another fleet
+// Sweep — consolidate ETH from fleet wallets to a target address
 // ---------------------------------------------------------------------------
 
+export interface SweepResult {
+  sourceFleet: string;
+  targetAddress: Address;
+  transfers: Array<{
+    wallet: string;
+    address: Address;
+    balanceBefore: bigint;
+    amountSent: bigint;
+    txHash: string | null;
+    status: string;
+    error?: string;
+  }>;
+  totalSwept: bigint;
+  totalFailed: bigint;
+}
+
 /**
- * Sweep all ETH from sourceFleet's wallets into targetFleet's wallets.
+ * Sweep ETH from all wallets in a fleet to a target address.
  *
- * Distributes pro-rata across the target fleet's wallets.
- * This creates funding operations under the hood.
+ * Target can be:
+ * - Another fleet's wallets (splits evenly across them)
+ * - Master SA (consolidate back)
+ * - Any arbitrary address
+ *
+ * Each wallet sends (balance - reserveWei) to avoid draining gas money
+ * for the transfer itself.
  */
 export async function sweepFleet(params: {
   sourceFleetName: string;
-  targetFleetName: string;
-}): Promise<{ sourceFleet: string; targetFleet: string; operationIds: number[] }> {
+  targetAddress?: Address;
+  targetFleetName?: string;
+  /** Wei to reserve in each source wallet for gas (default: 0.0005 ETH) */
+  reserveWei?: bigint;
+}): Promise<SweepResult> {
   const source = getFleetByName(params.sourceFleetName);
   if (!source) throw new Error(`Source fleet "${params.sourceFleetName}" not found`);
+  if (source.wallets.length === 0) throw new Error(`Source fleet "${params.sourceFleetName}" has no wallets`);
 
-  const target = getFleetByName(params.targetFleetName);
-  if (!target) throw new Error(`Target fleet "${params.targetFleetName}" not found`);
-
-  if (source.clusterId === target.clusterId) {
-    throw new Error("Source and target fleet cannot be the same");
+  // Resolve target
+  let targetAddress: Address;
+  if (params.targetFleetName) {
+    // Sweep to another fleet — send to that fleet's first wallet for now.
+    // A more sophisticated version would distribute across target wallets.
+    const target = getFleetByName(params.targetFleetName);
+    if (!target) throw new Error(`Target fleet "${params.targetFleetName}" not found`);
+    if (target.wallets.length === 0) throw new Error(`Target fleet "${params.targetFleetName}" has no wallets`);
+    if (source.clusterId === target.clusterId) throw new Error("Source and target fleet cannot be the same");
+    targetAddress = target.wallets[0]!.address as Address;
+  } else if (params.targetAddress) {
+    targetAddress = params.targetAddress;
+  } else {
+    // Default: sweep back to master SA
+    const master = await ensureMasterWallet();
+    targetAddress = master.address as Address;
   }
 
-  if (target.wallets.length === 0) {
-    throw new Error("Target fleet has no wallets");
+  const reserveWei = params.reserveWei ?? 500_000_000_000_000n; // 0.0005 ETH default
+
+  // Query balances
+  const chainCfg = getChainConfig();
+  const client = createPublicClient({ chain: chainCfg.chain, transport: http(chainCfg.rpcUrl) });
+
+  const transfers: SweepResult["transfers"] = [];
+  let totalSwept = 0n;
+  let totalFailed = 0n;
+
+  for (const wallet of source.wallets) {
+    const balance = await client.getBalance({ address: wallet.address as Address });
+    const sendable = balance > reserveWei ? balance - reserveWei : 0n;
+
+    if (sendable <= 0n) {
+      transfers.push({
+        wallet: wallet.name,
+        address: wallet.address as Address,
+        balanceBefore: balance,
+        amountSent: 0n,
+        txHash: null,
+        status: "skipped",
+      });
+      continue;
+    }
+
+    try {
+      const result = await transferFromSmartAccount({
+        smartAccountName: wallet.cdpAccountName,
+        to: targetAddress,
+        amountWei: sendable,
+      });
+      transfers.push({
+        wallet: wallet.name,
+        address: wallet.address as Address,
+        balanceBefore: balance,
+        amountSent: sendable,
+        txHash: result.txHash,
+        status: result.status,
+      });
+      if (result.status === "complete") {
+        totalSwept += sendable;
+      } else {
+        totalFailed += sendable;
+      }
+    } catch (err) {
+      transfers.push({
+        wallet: wallet.name,
+        address: wallet.address as Address,
+        balanceBefore: balance,
+        amountSent: 0n,
+        txHash: null,
+        status: "error",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      totalFailed += sendable;
+    }
   }
-
-  // For each source wallet, create a funding request to distribute to target wallets.
-  // In practice, this requires individual transfers. For now, we'll use the
-  // master wallet as intermediary: source wallets → master → target wallets.
-  // TODO: Direct wallet-to-wallet transfers when supported.
-
-  // For simplicity, fund the target fleet from master with the source fleet's
-  // total balance. This is a two-step process that should be expanded later.
-  const operationIds: number[] = [];
-
-  // Step 1: Estimate total ETH in source fleet (would need balance queries)
-  // For now, we create the operation and let the caller verify amounts.
-  // This is a placeholder for the full sweep implementation.
 
   return {
     sourceFleet: params.sourceFleetName,
-    targetFleet: params.targetFleetName,
-    operationIds,
+    targetAddress,
+    transfers,
+    totalSwept,
+    totalFailed,
   };
 }
 

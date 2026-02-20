@@ -203,19 +203,33 @@ fleetsRouter.post("/:name/sell", async (req, res) => {
   }
 });
 
-/** POST /fleets/:name/sweep — sweep ETH from this fleet to another */
+/** POST /fleets/:name/sweep — sweep ETH from this fleet to a target */
 fleetsRouter.post("/:name/sweep", async (req, res) => {
-  const { targetFleet } = req.body as { targetFleet?: string };
-  if (!targetFleet) {
-    return res.status(400).json({ error: "targetFleet name is required" });
-  }
+  const { targetFleet, targetAddress, reserveWei } = req.body as {
+    targetFleet?: string;
+    targetAddress?: string;
+    reserveWei?: string;
+  };
 
+  // At least one target, or default to master
   try {
     const result = await sweepFleet({
       sourceFleetName: req.params.name!,
       targetFleetName: targetFleet,
+      targetAddress: targetAddress as `0x${string}` | undefined,
+      reserveWei: reserveWei ? BigInt(reserveWei) : undefined,
     });
-    return res.json(result);
+    // Serialize bigints for JSON
+    return res.json({
+      ...result,
+      totalSwept: result.totalSwept.toString(),
+      totalFailed: result.totalFailed.toString(),
+      transfers: result.transfers.map((t) => ({
+        ...t,
+        balanceBefore: t.balanceBefore.toString(),
+        amountSent: t.amountSent.toString(),
+      })),
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected error";
     return res.status(400).json({ error: message });
