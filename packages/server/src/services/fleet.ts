@@ -9,6 +9,7 @@
  * - `getFleetByName()` — resolve fleet by name
  * - `listFleets()` — list all fleets with wallet counts
  */
+import { createPublicClient, http, type Address } from "viem";
 import { db } from "../db/index.js";
 import type { ClusterRecord, WalletRecord } from "../types.js";
 import { createFleetWallets, ensureMasterWallet } from "./wallet.js";
@@ -17,6 +18,7 @@ import {
   approveAndExecuteOperation,
 } from "./operations.js";
 import { getFleetStatus, type FleetSummary } from "./monitor.js";
+import { getChainConfig } from "./network.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -68,7 +70,7 @@ export async function createFleet(params: {
   const cluster = db.createCluster({ name, strategyMode });
   db.setClusterWallets(cluster.id, walletIds);
 
-  // Optionally fund
+  // Optionally fund — atomic: all wallets must be funded or fleet creation fails
   let fundingOperationId: number | null = null;
   if (fundAmountWei && BigInt(fundAmountWei) > 0n) {
     const op = requestFundingOperation({
@@ -81,6 +83,37 @@ export async function createFleet(params: {
       approvedBy: "fleet-create",
     });
     fundingOperationId = executed.id;
+
+    if (executed.status !== "complete") {
+      throw new Error(
+        `Fleet funding failed (operation #${executed.id}, status: ${executed.status}). ` +
+          `Error: ${executed.errorMessage ?? "unknown"}. Fleet wallets may be partially funded.`,
+      );
+    }
+
+    // Verify all wallets received funds on-chain (skip in mock mode)
+    if (process.env.CDP_MOCK_MODE !== "1") {
+      const chainCfg = getChainConfig();
+      const client = createPublicClient({
+        chain: chainCfg.chain,
+        transport: http(chainCfg.rpcUrl),
+      });
+      const expectedMin = BigInt(fundAmountWei) / 2n; // at least half expected (gas deducted)
+      const unfunded: string[] = [];
+      for (const w of wallets) {
+        const bal = await client.getBalance({ address: w.address as Address });
+        if (bal < expectedMin) {
+          unfunded.push(`${w.name} (${w.address}): ${bal.toString()} wei`);
+        }
+      }
+      if (unfunded.length > 0) {
+        throw new Error(
+          `Fleet funding incomplete — ${unfunded.length}/${wallets.length} wallets underfunded:\n` +
+            unfunded.join("\n") +
+            `\nFleet "${name}" created but NOT ready for trading.`,
+        );
+      }
+    }
   }
 
   return {

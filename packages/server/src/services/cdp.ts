@@ -23,7 +23,7 @@ import { getBundlerRouter } from "./bundler/index.js";
 import { resolveDeterministicBuyRoute, resolveDeterministicSellRoute } from "./swapRoute.js";
 import { resolveCoinRoute, type CoinRouteClient } from "./coinRoute.js";
 import { encodeV4ExactInSwap, getRouterAddress } from "./v4SwapEncoder.js";
-import { quoteExactInput, applySlippage } from "./v4Quoter.js";
+import { quoteExactInput, quoteExactInputSingle, applySlippage, getQuoterAddress } from "./v4Quoter.js";
 import { ensurePermit2Approval } from "./erc20.js";
 import { discoverPoolParams } from "./poolDiscovery.js";
 
@@ -592,17 +592,56 @@ export async function swapFromSmartAccount(input: {
       return addr;
     });
 
-    // Pre-quote to compute minAmountOut with slippage protection
+    // Pre-quote to compute minAmountOut with slippage protection.
+    // Try multi-hop quoteExactInput first; if it fails (Doppler hooks throw
+    // HookNotImplemented), fall back to sequential quoteExactInputSingle per hop.
     const slippageBps = input.slippageBps;
-    const quote = await quoteExactInput({
-      chainId: chainCfg.chainId,
-      client: publicClient,
-      path: routePath,
-      poolParams: routePoolParams ?? [],
-      amountIn: input.fromAmount,
-      exactInput: true,
-    });
-    const minAmountOut = applySlippage(quote.amountOut, slippageBps);
+    let quotedAmountOut: bigint;
+
+    try {
+      const quote = await quoteExactInput({
+        chainId: chainCfg.chainId,
+        client: publicClient,
+        path: routePath,
+        poolParams: routePoolParams ?? [],
+        amountIn: input.fromAmount,
+        exactInput: true,
+      });
+      quotedAmountOut = quote.amountOut;
+    } catch {
+      // Sequential single-hop quoting for Doppler-hooked pools
+      const hops = routePoolParams ?? [];
+      let currentAmount = input.fromAmount;
+      for (let i = 0; i < hops.length; i++) {
+        const hop = hops[i]!;
+        const tokenIn = routePath[i]!;
+        const tokenOut = routePath[i + 1]!;
+        // Determine currency ordering (currency0 < currency1)
+        const inNorm = tokenIn.toLowerCase();
+        const outNorm = tokenOut.toLowerCase();
+        const zeroForOne = inNorm < outNorm;
+        const currency0 = zeroForOne ? tokenIn : tokenOut;
+        const currency1 = zeroForOne ? tokenOut : tokenIn;
+
+        const hopQuote = await quoteExactInputSingle({
+          chainId: chainCfg.chainId,
+          client: publicClient,
+          poolKey: {
+            currency0: currency0 as `0x${string}`,
+            currency1: currency1 as `0x${string}`,
+            fee: hop.fee,
+            tickSpacing: hop.tickSpacing,
+            hooks: hop.hooks,
+          },
+          zeroForOne,
+          amountIn: currentAmount,
+          hookData: hop.hookData ?? "0x",
+        });
+        currentAmount = hopQuote.amountOut;
+      }
+      quotedAmountOut = currentAmount;
+    }
+    const minAmountOut = applySlippage(quotedAmountOut, slippageBps);
 
     const encoded = encodeV4ExactInSwap({
       chainId: chainCfg.chainId,
