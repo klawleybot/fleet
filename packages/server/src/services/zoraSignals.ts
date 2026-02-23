@@ -129,6 +129,215 @@ export function watchlistSignals(input?: { listName?: string; limit?: number }):
   });
 }
 
+// --- P4: Momentum Intelligence ---
+
+export interface PumpSignal {
+  coinAddress: `0x${string}`;
+  symbol: string | null;
+  name: string | null;
+  momentumAcceleration1h: number;
+  netFlowUsdc1h: number;
+  momentumScore: number;
+  coinUrl: string;
+}
+
+export interface DipSignal {
+  coinAddress: `0x${string}`;
+  symbol: string | null;
+  name: string | null;
+  momentumAcceleration1h: number;
+  netFlowUsdc1h: number;
+  swapCount24h: number;
+  momentumScore: number;
+  coinUrl: string;
+}
+
+/**
+ * Detect coins with pump signals — high acceleration + positive net flow.
+ * Used to identify selling opportunities on coins the fleet holds.
+ * @param coinAddresses - only check these coins (active positions)
+ */
+export function detectPumpSignals(input: {
+  coinAddresses: `0x${string}`[];
+  accelerationThreshold?: number;
+  netFlowMinUsdc?: number;
+}): PumpSignal[] {
+  const threshold = input.accelerationThreshold ?? 3.0;
+  const netFlowMin = input.netFlowMinUsdc ?? 0;
+
+  if (input.coinAddresses.length === 0) return [];
+
+  return withZoraDb((db) => {
+    const placeholders = input.coinAddresses.map(() => "?").join(",");
+    const rows = db
+      .prepare(`
+        SELECT a.coin_address, c.symbol, c.name, c.chain_id,
+               COALESCE(a.momentum_acceleration_1h, 0) AS momentum_acceleration_1h,
+               COALESCE(a.net_flow_usdc_1h, 0) AS net_flow_usdc_1h,
+               COALESCE(a.momentum_score, 0) AS momentum_score
+        FROM coin_analytics a
+        LEFT JOIN coins c ON c.address = a.coin_address
+        WHERE lower(a.coin_address) IN (${placeholders})
+          AND COALESCE(a.momentum_acceleration_1h, 0) >= ?
+          AND COALESCE(a.net_flow_usdc_1h, 0) >= ?
+        ORDER BY a.momentum_acceleration_1h DESC
+      `)
+      .all(...input.coinAddresses.map((a) => a.toLowerCase()), threshold, netFlowMin) as Array<any>;
+
+    return rows
+      .filter((r) => typeof r.coin_address === "string" && isAddress(r.coin_address))
+      .map((r) => ({
+        coinAddress: r.coin_address.toLowerCase() as `0x${string}`,
+        symbol: r.symbol ?? null,
+        name: r.name ?? null,
+        momentumAcceleration1h: Number(r.momentum_acceleration_1h),
+        netFlowUsdc1h: Number(r.net_flow_usdc_1h),
+        momentumScore: Number(r.momentum_score),
+        coinUrl: coinUrl(r.chain_id, r.coin_address),
+      }));
+  });
+}
+
+/**
+ * Detect coins showing dip signals — were active recently but decelerating with negative flow.
+ * Checks watchlist + previously traded coins.
+ * @param previouslyTradedAddresses - coins the fleet has traded before
+ */
+export function detectDipSignals(input: {
+  previouslyTradedAddresses?: `0x${string}`[];
+  accelerationThreshold?: number;
+  minSwapCount24h?: number;
+  listName?: string;
+}): DipSignal[] {
+  const threshold = input.accelerationThreshold ?? 0.5;
+  const minSwaps = input.minSwapCount24h ?? 10;
+
+  return withZoraDb((db) => {
+    // Get watchlist coins with dip characteristics
+    const watchlistRows = db
+      .prepare(`
+        SELECT a.coin_address, c.symbol, c.name, c.chain_id,
+               COALESCE(a.momentum_acceleration_1h, 0) AS momentum_acceleration_1h,
+               COALESCE(a.net_flow_usdc_1h, 0) AS net_flow_usdc_1h,
+               COALESCE(a.swap_count_24h, 0) AS swap_count_24h,
+               COALESCE(a.momentum_score, 0) AS momentum_score
+        FROM coin_watchlist w
+        JOIN coin_analytics a ON lower(a.coin_address) = lower(w.coin_address)
+        LEFT JOIN coins c ON c.address = a.coin_address
+        WHERE w.enabled = 1
+          AND (? IS NULL OR w.list_name = ?)
+          AND COALESCE(a.momentum_acceleration_1h, 0) <= ?
+          AND COALESCE(a.swap_count_24h, 0) >= ?
+          AND COALESCE(a.net_flow_usdc_1h, 0) < 0
+        ORDER BY a.net_flow_usdc_1h ASC
+      `)
+      .all(
+        input.listName ?? null,
+        input.listName ?? null,
+        threshold,
+        minSwaps,
+      ) as Array<any>;
+
+    // Also check previously traded coins
+    let tradedRows: Array<any> = [];
+    if (input.previouslyTradedAddresses && input.previouslyTradedAddresses.length > 0) {
+      const placeholders = input.previouslyTradedAddresses.map(() => "?").join(",");
+      tradedRows = db
+        .prepare(`
+          SELECT a.coin_address, c.symbol, c.name, c.chain_id,
+                 COALESCE(a.momentum_acceleration_1h, 0) AS momentum_acceleration_1h,
+                 COALESCE(a.net_flow_usdc_1h, 0) AS net_flow_usdc_1h,
+                 COALESCE(a.swap_count_24h, 0) AS swap_count_24h,
+                 COALESCE(a.momentum_score, 0) AS momentum_score
+          FROM coin_analytics a
+          LEFT JOIN coins c ON c.address = a.coin_address
+          WHERE lower(a.coin_address) IN (${placeholders})
+            AND COALESCE(a.momentum_acceleration_1h, 0) <= ?
+            AND COALESCE(a.swap_count_24h, 0) >= ?
+            AND COALESCE(a.net_flow_usdc_1h, 0) < 0
+          ORDER BY a.net_flow_usdc_1h ASC
+        `)
+        .all(
+          ...input.previouslyTradedAddresses.map((a) => a.toLowerCase()),
+          threshold,
+          minSwaps,
+        ) as Array<any>;
+    }
+
+    // Deduplicate by coin_address
+    const seen = new Set<string>();
+    const allRows = [...watchlistRows, ...tradedRows];
+    const results: DipSignal[] = [];
+
+    for (const r of allRows) {
+      if (typeof r.coin_address !== "string" || !isAddress(r.coin_address)) continue;
+      const addr = r.coin_address.toLowerCase();
+      if (seen.has(addr)) continue;
+      seen.add(addr);
+      results.push({
+        coinAddress: addr as `0x${string}`,
+        symbol: r.symbol ?? null,
+        name: r.name ?? null,
+        momentumAcceleration1h: Number(r.momentum_acceleration_1h),
+        netFlowUsdc1h: Number(r.net_flow_usdc_1h),
+        swapCount24h: Number(r.swap_count_24h),
+        momentumScore: Number(r.momentum_score),
+        coinUrl: coinUrl(r.chain_id, r.coin_address),
+      });
+    }
+
+    return results;
+  });
+}
+
+/**
+ * Calculate a discount factor (0.0-1.0) for own-cluster activity on a coin.
+ * 1.0 = no own activity, lower = own wallets are inflating the signal.
+ */
+export function discountOwnActivity(
+  coinAddress: `0x${string}`,
+  clusterWalletAddresses: string[],
+): number {
+  if (clusterWalletAddresses.length === 0) return 1.0;
+
+  return withZoraDb((db) => {
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const addr = coinAddress.toLowerCase();
+
+    // Total swaps in last 1h for this coin
+    const totalRow = db
+      .prepare(`
+        SELECT COUNT(*) AS cnt
+        FROM coin_swaps
+        WHERE lower(coin_address) = ?
+          AND block_timestamp >= ?
+      `)
+      .get(addr, oneHourAgo) as { cnt: number } | undefined;
+
+    const totalSwaps = totalRow?.cnt ?? 0;
+    if (totalSwaps === 0) return 1.0;
+
+    // Own swaps (sender_address matches any cluster wallet)
+    const lowerAddresses = clusterWalletAddresses.map((a) => a.toLowerCase());
+    const placeholders = lowerAddresses.map(() => "?").join(",");
+    const ownRow = db
+      .prepare(`
+        SELECT COUNT(*) AS cnt
+        FROM coin_swaps
+        WHERE lower(coin_address) = ?
+          AND block_timestamp >= ?
+          AND lower(sender_address) IN (${placeholders})
+      `)
+      .get(addr, oneHourAgo, ...lowerAddresses) as { cnt: number } | undefined;
+
+    const ownSwaps = ownRow?.cnt ?? 0;
+    if (ownSwaps === 0) return 1.0;
+
+    // Discount = 1 - (ownSwaps / totalSwaps)
+    return Math.max(0, 1.0 - ownSwaps / totalSwaps);
+  });
+}
+
 export function selectSignalCoin(input: {
   mode: ZoraSignalMode;
   listName?: string;

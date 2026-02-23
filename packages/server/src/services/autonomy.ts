@@ -1,8 +1,9 @@
 import { db } from "../db/index.js";
 import { evaluateAutoApproval, getAutoApprovalPolicy } from "./approval.js";
-import { approveAndExecuteOperation, requestSupportFromZoraSignal } from "./operations.js";
+import { approveAndExecuteOperation, requestSupportFromZoraSignal, requestExitCoinOperation, requestSupportCoinOperation } from "./operations.js";
 import type { OperationRecord, StrategyMode } from "../types.js";
 import type { ZoraSignalMode } from "./zoraSignals.js";
+import { detectPumpSignals, detectDipSignals, discountOwnActivity } from "./zoraSignals.js";
 
 interface AutonomyConfig {
   enabled: boolean;
@@ -76,6 +77,9 @@ export function getAutonomyConfig(): AutonomyConfig {
   const minMomentumRaw = process.env.AUTONOMY_MIN_MOMENTUM?.trim();
   const minMomentum = minMomentumRaw ? Number(minMomentumRaw) : null;
 
+  const pumpThresholdRaw = process.env.AUTONOMY_PUMP_THRESHOLD?.trim();
+  const dipThresholdRaw = process.env.AUTONOMY_DIP_THRESHOLD?.trim();
+
   return {
     enabled: parseBool(process.env.AUTONOMY_ENABLED, false),
     autoStart: parseBool(process.env.AUTONOMY_AUTO_START, false),
@@ -90,6 +94,9 @@ export function getAutonomyConfig(): AutonomyConfig {
     requestedBy: process.env.AUTONOMY_REQUESTED_BY?.trim() || "autonomy-worker",
     createRequests: parseBool(process.env.AUTONOMY_CREATE_REQUESTS, true),
     autoApprovePending: parseBool(process.env.AUTONOMY_AUTO_APPROVE_PENDING, true),
+    pumpThreshold: pumpThresholdRaw ? Number(pumpThresholdRaw) : 3.0,
+    dipThreshold: dipThresholdRaw ? Number(dipThresholdRaw) : 0.5,
+    ownDiscountEnabled: parseBool(process.env.AUTONOMY_OWN_DISCOUNT_ENABLED, true),
   };
 }
 
@@ -145,6 +152,109 @@ export async function runAutonomyTick(): Promise<TickResult> {
           const message = error instanceof Error ? error.message : "unknown cluster creation error";
           result.errors.push(`cluster ${clusterId}: ${message}`);
         }
+      }
+    }
+
+    // --- P4: Momentum intelligence — pump/dip detection ---
+    for (const clusterId of config.clusterIds) {
+      try {
+        // Get cluster wallet addresses for own-activity discount
+        const clusterWallets = db.listClusterWalletDetails(clusterId);
+        const walletAddresses = clusterWallets.map((w) => w.address);
+
+        // Pump detection: check active positions for sell opportunities
+        const positions = db.listPositionsByCluster(clusterId);
+        const heldCoins = [...new Set(
+          positions
+            .filter((p) => BigInt(p.holdingsRaw) > 0n)
+            .map((p) => p.coinAddress),
+        )];
+
+        if (heldCoins.length > 0) {
+          const pumpSignals = detectPumpSignals({
+            coinAddresses: heldCoins,
+            accelerationThreshold: config.pumpThreshold,
+          });
+
+          for (const signal of pumpSignals) {
+            let discount = 1.0;
+            if (config.ownDiscountEnabled) {
+              discount = discountOwnActivity(signal.coinAddress, walletAddresses);
+            }
+            // Skip if most activity is our own (discount < 0.3)
+            if (discount < 0.3) {
+              result.skipped.push({ reason: `pump signal ${signal.coinAddress} discounted (own activity ${((1 - discount) * 100).toFixed(0)}%)` });
+              continue;
+            }
+
+            if (db.hasOpenOperationForCluster(clusterId)) {
+              result.skipped.push({ reason: `cluster ${clusterId} has open operation (pump sell)` });
+              break;
+            }
+
+            try {
+              // Find total holdings to sell
+              const coinPositions = positions.filter((p) => p.coinAddress === signal.coinAddress && BigInt(p.holdingsRaw) > 0n);
+              const totalHoldings = coinPositions.reduce((sum, p) => sum + BigInt(p.holdingsRaw), 0n);
+              if (totalHoldings <= 0n) continue;
+
+              const operation = requestExitCoinOperation({
+                clusterId,
+                coinAddress: signal.coinAddress,
+                totalAmountWei: totalHoldings.toString(),
+                slippageBps: config.slippageBps,
+                ...(config.strategyMode ? { strategyMode: config.strategyMode } : {}),
+                requestedBy: `${config.requestedBy}:pump`,
+              });
+              result.createdOperationIds.push(operation.id);
+            } catch (error) {
+              const message = error instanceof Error ? error.message : "pump sell error";
+              result.errors.push(`cluster ${clusterId} pump sell ${signal.coinAddress}: ${message}`);
+            }
+          }
+        }
+
+        // Dip detection: check for buy opportunities
+        const previouslyTraded = [...new Set(positions.map((p) => p.coinAddress))];
+        const dipSignals = detectDipSignals({
+          previouslyTradedAddresses: previouslyTraded,
+          accelerationThreshold: config.dipThreshold,
+          ...(config.watchlistName ? { listName: config.watchlistName } : {}),
+        });
+
+        for (const signal of dipSignals) {
+          let discount = 1.0;
+          if (config.ownDiscountEnabled) {
+            discount = discountOwnActivity(signal.coinAddress, walletAddresses);
+          }
+          if (discount < 0.3) {
+            result.skipped.push({ reason: `dip signal ${signal.coinAddress} discounted (own activity ${((1 - discount) * 100).toFixed(0)}%)` });
+            continue;
+          }
+
+          if (db.hasOpenOperationForCluster(clusterId)) {
+            result.skipped.push({ reason: `cluster ${clusterId} has open operation (dip buy)` });
+            break;
+          }
+
+          try {
+            const operation = requestSupportCoinOperation({
+              clusterId,
+              coinAddress: signal.coinAddress,
+              totalAmountWei: config.totalAmountWei,
+              slippageBps: config.slippageBps,
+              ...(config.strategyMode ? { strategyMode: config.strategyMode } : {}),
+              requestedBy: `${config.requestedBy}:dip`,
+            });
+            result.createdOperationIds.push(operation.id);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "dip buy error";
+            result.errors.push(`cluster ${clusterId} dip buy ${signal.coinAddress}: ${message}`);
+          }
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "momentum intel error";
+        result.errors.push(`cluster ${clusterId} momentum: ${message}`);
       }
     }
 
