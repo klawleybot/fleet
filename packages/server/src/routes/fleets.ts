@@ -38,9 +38,9 @@ fleetsRouter.post("/", async (req, res) => {
     const result = await createFleet({
       name,
       walletCount: wallets,
-      fundAmountWei,
-      sourceFleetName,
-      strategyMode: strategyMode as "sync" | "staggered" | "momentum" | undefined,
+      ...(fundAmountWei && { fundAmountWei }),
+      ...(sourceFleetName && { sourceFleetName }),
+      ...(strategyMode && { strategyMode: strategyMode as "sync" | "staggered" | "momentum" }),
     });
     return res.status(201).json(result);
   } catch (error) {
@@ -114,9 +114,9 @@ fleetsRouter.post("/:name/buy", async (req, res) => {
         totalAmountInWei: BigInt(totalAmountWei),
         slippageBps: slippageBps!,
         durationMs: overMs,
-        intervals,
-        jiggle,
-        jiggleFactor,
+        ...(intervals != null && { intervals }),
+        ...(jiggle != null && { jiggle }),
+        ...(jiggleFactor != null && { jiggleFactor }),
       });
       return res.json({ mode: "drip", durationMs: overMs, tradeCount: trades.length, trades });
     }
@@ -177,9 +177,9 @@ fleetsRouter.post("/:name/sell", async (req, res) => {
         totalAmountInWei: BigInt(totalAmountWei),
         slippageBps: slippageBps!,
         durationMs: overMs,
-        intervals,
-        jiggle,
-        jiggleFactor,
+        ...(intervals != null && { intervals }),
+        ...(jiggle != null && { jiggle }),
+        ...(jiggleFactor != null && { jiggleFactor }),
       });
       return res.json({ mode: "drip", durationMs: overMs, tradeCount: trades.length, trades });
     }
@@ -215,9 +215,9 @@ fleetsRouter.post("/:name/sweep", async (req, res) => {
   try {
     const result = await sweepFleet({
       sourceFleetName: req.params.name!,
-      targetFleetName: targetFleet,
-      targetAddress: targetAddress as `0x${string}` | undefined,
-      reserveWei: reserveWei ? BigInt(reserveWei) : undefined,
+      ...(targetFleet && { targetFleetName: targetFleet }),
+      ...(targetAddress && { targetAddress: targetAddress as `0x${string}` }),
+      ...(reserveWei && { reserveWei: BigInt(reserveWei) }),
     });
     // Serialize bigints for JSON
     return res.json({

@@ -1,4 +1,4 @@
-import { parseEventLogs, type Address, type Hex, type Log } from "viem";
+import { parseEventLogs, type AbiEvent, type Address, type Hex, type Log } from "viem";
 import type { HopPoolParams } from "./swapRoute.js";
 import { zoraFactoryAbi, ZORA_FACTORY_ADDRESSES } from "./coinLauncher.js";
 
@@ -6,7 +6,7 @@ import { zoraFactoryAbi, ZORA_FACTORY_ADDRESSES } from "./coinLauncher.js";
 export interface PoolDiscoveryClient {
   getLogs(args: {
     address: Address;
-    event: (typeof zoraFactoryAbi)[number];
+    event: AbiEvent;
     fromBlock: bigint;
     toBlock: "latest";
   }): Promise<Log[]>;

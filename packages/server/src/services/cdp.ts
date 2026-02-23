@@ -29,8 +29,13 @@ import { discoverPoolParams } from "./poolDiscovery.js";
 
 const OWNER_ACCOUNT_NAME = "fleet-owner";
 const MASTER_SMART_ACCOUNT_NAME = "master";
-const CDP_MOCK_MODE = process.env.CDP_MOCK_MODE === "1";
-const chainCfg = getChainConfig();
+function isCdpMockMode(): boolean {
+  return process.env.CDP_MOCK_MODE === "1";
+}
+
+function getChainCfg() {
+  return getChainConfig();
+}
 
 export type SupportedNetwork = "base" | "base-sepolia";
 
@@ -52,7 +57,7 @@ function getSignerBackend(): SignerBackend {
  * assert the expected type without `as any`.
  */
 function resolveCdpNetwork<T extends string = SupportedNetwork>(network?: SupportedNetwork): T {
-  return (network ?? chainCfg.cdpNetwork) as T;
+  return (network ?? getChainCfg().cdpNetwork) as T;
 }
 
 let cdpClient: CdpClient | null = null;
@@ -140,15 +145,15 @@ function localAccountForName(name: string) {
 function localWalletClient(name: string) {
   return createWalletClient({
     account: localAccountForName(name),
-    chain: chainCfg.chain,
-    transport: http(chainCfg.rpcUrl),
+    chain: getChainCfg().chain,
+    transport: http(getChainCfg().rpcUrl),
   });
 }
 
 function localPublicClient() {
   return createPublicClient({
-    chain: chainCfg.chain,
-    transport: http(chainCfg.rpcUrl),
+    chain: getChainCfg().chain,
+    transport: http(getChainCfg().rpcUrl),
   });
 }
 
@@ -186,7 +191,7 @@ async function submitUserOperationViaRouter(input: {
     const account = await getLocalSmartAccount(input.smartAccountName);
     const bundlerCfg = loadBundlerConfigFromEnv();
     const bundlerClient = createBundlerClient({
-      chain: chainCfg.chain,
+      chain: getChainCfg().chain,
       client: localPublicClient(),
       transport: http(bundlerCfg.primary.rpcUrl),
       account,
@@ -244,7 +249,7 @@ async function waitForUserOperationWithBundlerFirst(input: {
 }
 
 export async function getOrCreateOwnerAccount(): Promise<EvmAccountRef> {
-  if (CDP_MOCK_MODE) {
+  if (isCdpMockMode()) {
     return {
       address: mockAddress("owner", OWNER_ACCOUNT_NAME),
       name: OWNER_ACCOUNT_NAME,
@@ -267,7 +272,7 @@ export async function getOrCreateOwnerAccount(): Promise<EvmAccountRef> {
 }
 
 async function getOwnerAccountInternal(): Promise<any> {
-  if (CDP_MOCK_MODE) {
+  if (isCdpMockMode()) {
     return { address: mockAddress("owner", OWNER_ACCOUNT_NAME), name: OWNER_ACCOUNT_NAME };
   }
 
@@ -284,7 +289,7 @@ async function getOwnerAccountInternal(): Promise<any> {
 export async function createSmartAccount(
   name: string,
 ): Promise<{ owner: EvmAccountRef; smartAccount: SmartAccountRef }> {
-  if (CDP_MOCK_MODE) {
+  if (isCdpMockMode()) {
     return {
       owner: {
         address: mockAddress("owner", OWNER_ACCOUNT_NAME),
@@ -328,7 +333,7 @@ export async function getOrCreateMasterSmartAccount(): Promise<{
   owner: EvmAccountRef;
   smartAccount: SmartAccountRef;
 }> {
-  if (CDP_MOCK_MODE) {
+  if (isCdpMockMode()) {
     return {
       owner: {
         address: mockAddress("owner", OWNER_ACCOUNT_NAME),
@@ -371,7 +376,7 @@ export async function getOrCreateMasterSmartAccount(): Promise<{
 export async function getOrCreateSmartAccountByName(
   name: string,
 ): Promise<{ owner: EvmAccountRef; smartAccount: SmartAccountRef }> {
-  if (CDP_MOCK_MODE) {
+  if (isCdpMockMode()) {
     return {
       owner: {
         address: mockAddress("owner", OWNER_ACCOUNT_NAME),
@@ -416,7 +421,7 @@ export async function transferFromOwnerAccount(input: {
   to: `0x${string}`;
   amountWei: bigint;
 }): Promise<{ userOpHash: `0x${string}`; txHash: `0x${string}` | null; status: string }> {
-  if (CDP_MOCK_MODE) {
+  if (isCdpMockMode()) {
     if (!isAddress(input.to)) throw new Error(`Invalid recipient address: ${input.to}`);
     if (input.amountWei <= 0n) throw new Error("amountWei must be > 0");
     return {
@@ -435,7 +440,7 @@ export async function transferFromOwnerAccount(input: {
     const txHash = await wc.sendTransaction({
       to: input.to,
       value: input.amountWei,
-      chain: chainCfg.chain,
+      chain: getChainCfg().chain,
     });
     const receipt = await pc.waitForTransactionReceipt({ hash: txHash });
     return {
@@ -458,7 +463,7 @@ export async function transferFromSmartAccount(input: {
   amountWei: bigint;
   network?: SupportedNetwork;
 }): Promise<{ userOpHash: `0x${string}`; txHash: `0x${string}` | null; status: string }> {
-  if (CDP_MOCK_MODE) {
+  if (isCdpMockMode()) {
     if (!isAddress(input.to)) throw new Error(`Invalid recipient address: ${input.to}`);
     if (input.amountWei <= 0n) throw new Error("amountWei must be > 0");
     return {
@@ -513,7 +518,7 @@ export async function swapFromSmartAccount(input: {
   slippageBps: number;
   network?: SupportedNetwork;
 }): Promise<{ userOpHash: `0x${string}`; txHash: `0x${string}` | null; status: string; amountOut?: string }> {
-  if (CDP_MOCK_MODE) {
+  if (isCdpMockMode()) {
     if (!isAddress(input.fromToken) || !isAddress(input.toToken)) {
       throw new Error("Invalid token addresses for mock swap");
     }
@@ -532,8 +537,8 @@ export async function swapFromSmartAccount(input: {
     const isSell = fromNorm !== root && fromNorm !== WETH;
 
     const publicClient = createPublicClient({
-      chain: chainCfg.chain,
-      transport: http(chainCfg.rpcUrl),
+      chain: getChainCfg().chain,
+      transport: http(getChainCfg().rpcUrl),
     });
 
     // Determine the coin address (the non-ETH/WETH token)
@@ -573,7 +578,7 @@ export async function swapFromSmartAccount(input: {
           try {
             const params = await discoverPoolParams({
               client: publicClient,
-              chainId: chainCfg.chainId,
+              chainId: getChainCfg().chainId,
               coinAddress: target,
             });
             routePoolParams = Array.from({ length: route.hops }, () => params);
@@ -600,7 +605,7 @@ export async function swapFromSmartAccount(input: {
 
     try {
       const quote = await quoteExactInput({
-        chainId: chainCfg.chainId,
+        chainId: getChainCfg().chainId,
         client: publicClient,
         path: routePath,
         poolParams: routePoolParams ?? [],
@@ -624,7 +629,7 @@ export async function swapFromSmartAccount(input: {
         const currency1 = zeroForOne ? tokenOut : tokenIn;
 
         const hopQuote = await quoteExactInputSingle({
-          chainId: chainCfg.chainId,
+          chainId: getChainCfg().chainId,
           client: publicClient,
           poolKey: {
             currency0: currency0 as `0x${string}`,
@@ -644,7 +649,7 @@ export async function swapFromSmartAccount(input: {
     const minAmountOut = applySlippage(quotedAmountOut, slippageBps);
 
     const encoded = encodeV4ExactInSwap({
-      chainId: chainCfg.chainId,
+      chainId: getChainCfg().chainId,
       path: swapPath,
       amountIn: input.fromAmount,
       minAmountOut,
@@ -657,7 +662,7 @@ export async function swapFromSmartAccount(input: {
     // V4 Router uses Permit2 for ERC20 SETTLE_ALL, not regular transferFrom.
     if (isSell) {
       const smartAccount = await getLocalSmartAccount(input.smartAccountName);
-      const routerAddress = getRouterAddress(chainCfg.chainId);
+      const routerAddress = getRouterAddress(getChainCfg().chainId);
       const permit2Calls = await ensurePermit2Approval({
         client: publicClient,
         token: input.fromToken,
@@ -713,7 +718,7 @@ export async function sendUserOperationFromSmartAccount(input: {
   }>;
   network?: SupportedNetwork;
 }): Promise<{ userOpHash: `0x${string}`; txHash: `0x${string}` | null; status: string }> {
-  if (CDP_MOCK_MODE) {
+  if (isCdpMockMode()) {
     return {
       userOpHash: mockHash(`mock-userop:${input.smartAccountName}`),
       txHash: mockHash(`mock-userop-tx:${input.smartAccountName}`),
@@ -761,7 +766,7 @@ export async function sendUserOperationFromSmartAccount(input: {
 export function getSignerBackendInfo() {
   return {
     backend: getSignerBackend(),
-    chainId: chainCfg.chainId,
-    rpcUrl: chainCfg.rpcUrl,
+    chainId: getChainCfg().chainId,
+    rpcUrl: getChainCfg().rpcUrl,
   };
 }

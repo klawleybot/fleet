@@ -228,7 +228,9 @@ let _sqlite: Database.Database | null = null;
 
 function getSqlite(): Database.Database {
   if (_sqlite) return _sqlite;
-  const dbPath = process.env.SQLITE_PATH ?? path.resolve(process.cwd(), ".data", "pump-it-up.db");
+  const dbPath = process.env.SQLITE_PATH ?? path.resolve(
+    new URL(".", import.meta.url).pathname, "..", "..", ".data", "pump-it-up.db",
+  );
   const dbDirectory = path.dirname(dbPath);
   fs.mkdirSync(dbDirectory, { recursive: true });
   _sqlite = new Database(dbPath);

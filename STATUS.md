@@ -33,10 +33,19 @@ See `docs/OPERATIONS.md` for the full operational guide.
 - [x] P1: Named fleets
 - [x] P2: Temporal streaming (drip)
 - [x] P3: Jiggle
-- [ ] P4: Momentum intelligence (deferred)
-- [ ] P5: Gas optimization
+- [x] P4: Watchlist auto-tracking (Active Positions ↔ zora-intelligence)
+- [ ] P5: Alert-to-signal bridge (consume deduplicated alerts)
+- [ ] P6: Exit intelligence (auto-exit on negative momentum)
+- [ ] P7: Combined intelligence status view
+- [ ] P8: Gas optimization
 - [ ] Service mode: pm2 + structured logging (see `docs/SERVICE.md`)
 - [ ] OpenClaw skill packaging
+
+## Daily Checkpoint — 2026-02-20
+- **Progress**: First live beta sell on mainnet (0xb23c); 109 tests passing; production ops guide complete
+- **Decisions**: Disabled beta sell cron post-execution; used direct sell over drip (drip hangs)
+- **Blockers**: Drip sell hangs on sell path; watchlist gate blocks sells without zora-intelligence DB; 0xb23c total loss (no liquidity)
+- **Next 3**: (1) Fix drip sell hang, (2) Remove watchlist requirement for sells, (3) Wire zora-intelligence cross-reference
 
 ## Last Updated
 2026-02-20 (America/Denver)

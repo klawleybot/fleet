@@ -183,7 +183,7 @@ export async function createFleet(params: {
   }
 
   // --- Funding secured — safe to create wallets and transfer ---
-  const wallets = await createFleetWallets(walletCount);
+  const wallets = await createFleetWallets(walletCount, name);
   const walletIds = wallets.map((w) => w.id);
 
   const cluster = db.createCluster({ name, strategyMode });

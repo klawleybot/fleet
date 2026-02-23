@@ -89,14 +89,14 @@ export function resolveDeterministicSellRoute(input: {
   const buyRoute = resolveDeterministicBuyRoute({
     fromToken: root,
     toToken: from,
-    maxHops: input.maxHops,
+    ...(input.maxHops != null && { maxHops: input.maxHops }),
   });
 
   const reversedPath = [...buyRoute.path].reverse();
   return {
     path: reversedPath,
     hops: reversedPath.length - 1,
-    poolParams: buyRoute.poolParams ? [...buyRoute.poolParams].reverse() : undefined,
+    ...(buyRoute.poolParams && { poolParams: [...buyRoute.poolParams].reverse() }),
   };
 }
 

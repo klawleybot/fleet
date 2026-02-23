@@ -88,7 +88,7 @@ async function cmdStart() {
 
   // Use doppler to inject env, then start via pm2
   run(
-    `doppler run --project onchain-tooling --config dev -- ` +
+    `doppler run --project openclaw --config dev -- ` +
     `pm2 start ecosystem.config.cjs --env production`,
   );
 

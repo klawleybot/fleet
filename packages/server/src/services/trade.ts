@@ -166,7 +166,7 @@ export async function coordinatedSwap(input: {
         toToken: input.toToken,
         amountInWei: amounts[idx]!,
         slippageBps: input.slippageBps,
-        operationId: input.operationId,
+        operationId: input.operationId ?? null,
       }),
     ),
   );
@@ -215,7 +215,7 @@ export async function strategySwap(input: {
       amountsPerWallet: amounts,
       slippageBps: input.slippageBps,
       concurrency: Math.min(6, walletCount),
-      operationId: input.operationId,
+      operationId: input.operationId ?? null,
     });
   }
 
@@ -239,7 +239,7 @@ export async function strategySwap(input: {
           toToken: input.toToken,
           amountInWei: waveAmounts[idx]!,
           slippageBps: input.slippageBps,
-          operationId: input.operationId,
+          operationId: input.operationId ?? null,
         });
       }),
     );
@@ -371,7 +371,7 @@ export async function dripSwap(input: {
     amounts: walletAmounts,
     durationMs,
     intervals,
-    jiggle: input.jiggle,
+    ...(input.jiggle != null && { jiggle: input.jiggle }),
     jiggleFactor: input.jiggleFactor ?? 0.1, // tighter jiggle on sub-trades
   });
 
@@ -392,7 +392,7 @@ export async function dripSwap(input: {
       toToken: input.toToken,
       amountInWei: event.amount,
       slippageBps: input.slippageBps,
-      operationId: input.operationId,
+      operationId: input.operationId ?? null,
     });
     results.push(result);
   }

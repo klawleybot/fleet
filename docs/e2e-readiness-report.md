@@ -102,11 +102,11 @@ Full roundtrip executed on Base mainnet (2026-02-19):
 yarn workspace @fleet/server test
 
 # Base Sepolia e2e (needs doppler env)
-E2E_BASE_SEPOLIA=1 doppler run --project onchain-tooling --config dev -- \
+E2E_BASE_SEPOLIA=1 doppler run --project openclaw --config dev -- \
   yarn workspace @fleet/server test -- tests/e2e.swap-lifecycle.spec.ts
 
 # Base mainnet e2e (needs doppler env, costs ~$0.20)
-E2E_BASE_MAINNET=1 doppler run --project onchain-tooling --config dev -- \
+E2E_BASE_MAINNET=1 doppler run --project openclaw --config dev -- \
   yarn workspace @fleet/server test -- tests/e2e.mainnet-swap.spec.ts
 ```
 

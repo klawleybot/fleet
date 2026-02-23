@@ -130,7 +130,7 @@ Each wallet sends `balance - reserveWei`. Returns per-wallet transfer results.
 
 ```bash
 # With Doppler (recommended)
-doppler run --project onchain-tooling --config dev -- \
+doppler run --project openclaw --config dev -- \
   npx tsx packages/server/src/index.ts
 
 # Required env vars
@@ -148,7 +148,7 @@ FLEET_KILL_SWITCH=false
 For one-off operations, direct script execution avoids HTTP server stability issues:
 
 ```bash
-doppler run --project onchain-tooling --config dev -- \
+doppler run --project openclaw --config dev -- \
   node --import tsx/esm packages/server/scripts/live-fleet-run.ts
 ```
 

@@ -1,7 +1,7 @@
 /**
  * Live Fleet Test — Base Mainnet
  *
- * Usage: doppler run --project onchain-tooling --config dev -- npx tsx packages/server/scripts/live-fleet-test.ts
+ * Usage: doppler run --project openclaw --config dev -- npx tsx packages/server/scripts/live-fleet-test.ts
  */
 import { createPublicClient, http, formatEther, type Address } from "viem";
 import { base } from "viem/chains";

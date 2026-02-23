@@ -127,7 +127,7 @@ const permit2Abi = [
 ] as const;
 
 const MAX_UINT160 = (1n << 160n) - 1n;
-const MAX_UINT48 = (1n << 48n) - 1n;
+const MAX_UINT48 = Number((1n << 48n) - 1n);
 
 /**
  * Encode Permit2.approve(token, spender, maxUint160, maxUint48).

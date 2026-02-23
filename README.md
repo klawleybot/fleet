@@ -34,7 +34,7 @@ Prereqs:
 - Foundry (`anvil`, `forge`, `cast`) installed
   - macOS: `curl -L https://foundry.paradigm.xyz | bash && foundryup`
   - if you see a `libusb` error: `brew install libusb`
-- RPC secrets available (recommended via Doppler `onchain-tooling/dev`)
+- RPC secrets available (recommended via Doppler `openclaw/dev`)
   - `BASE_RPC_URL`
   - `BASE_SEPOLIA_RPC_URL`
 
@@ -83,6 +83,7 @@ What this validates end-to-end:
 - `REQUIRE_WATCHLIST_NAME` (optional list constraint)
 - `ALLOWED_COIN_ADDRESSES` (comma-separated coin allowlist)
 - `ZORA_INTEL_DB_PATH` (path to `zora-intelligence` sqlite db)
+- `FLEET_WATCHLIST_NAME` (watchlist for auto-tracking positions; default `Active Positions`)
 
 ## Autonomy + owner approval policy (env)
 

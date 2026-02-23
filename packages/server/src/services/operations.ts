@@ -3,7 +3,7 @@ import { db } from "../db/index.js";
 import { assertExecutionAllowed, assertFundingRequestAllowed, assertTradeRequestAllowed } from "./policy.js";
 import { distributeFunding } from "./funding.js";
 import { strategySwap } from "./trade.js";
-import { selectSignalCoin, topMovers, watchlistSignals, type ZoraSignalCoin, type ZoraSignalMode } from "./zoraSignals.js";
+import { addToWatchlist, removeFromWatchlist, getFleetWatchlistName, selectSignalCoin, topMovers, watchlistSignals, type ZoraSignalCoin, type ZoraSignalMode } from "./zoraSignals.js";
 import type { OperationRecord, StrategyMode } from "../types.js";
 
 const WETH_BASE = "0x4200000000000000000000000000000000000006" as const;
@@ -224,34 +224,48 @@ export async function approveAndExecuteOperation(input: {
       slippageBps: payload.slippageBps,
     });
 
-    const records =
-      operation.type === "SUPPORT_COIN"
-        ? await strategySwap({
-            walletIds,
-            fromToken: WETH_BASE,
-            toToken: payload.coinAddress,
-            totalAmountInWei: totalAmountWei,
-            slippageBps: payload.slippageBps,
-            mode: payload.strategyMode,
-            operationId: operation.id,
-          })
-        : await strategySwap({
-            walletIds,
-            fromToken: payload.coinAddress,
-            toToken: WETH_BASE,
-            totalAmountInWei: totalAmountWei,
-            slippageBps: payload.slippageBps,
-            mode: payload.strategyMode,
-            operationId: operation.id,
-          });
+    const isBuy = operation.type === "SUPPORT_COIN";
+    const records = await strategySwap({
+      walletIds,
+      fromToken: isBuy ? WETH_BASE : payload.coinAddress,
+      toToken: isBuy ? payload.coinAddress : WETH_BASE,
+      totalAmountInWei: totalAmountWei,
+      slippageBps: payload.slippageBps,
+      mode: payload.strategyMode,
+      operationId: operation.id,
+    });
 
-    return db.updateOperation({
+    const result = db.updateOperation({
       id: operation.id,
       status: "complete",
       resultJson: JSON.stringify({ tradeCount: records.length, trades: records }),
       approvedBy: input.approvedBy ?? null,
       errorMessage: null,
     });
+
+    // Auto-track positions in zora-intelligence watchlist
+    try {
+      if (isBuy) {
+        addToWatchlist(payload.coinAddress, {
+          label: `fleet-tracked`,
+          notes: `Auto-added by fleet operation #${operation.id}`,
+        });
+      } else {
+        // On exit, check if any wallets still hold this coin
+        const remaining = db.listPositionsByCoin(payload.coinAddress);
+        const hasHoldings = remaining.some((p) => {
+          try { return BigInt(p.holdingsRaw || "0") > 0n; } catch { return false; }
+        });
+        if (!hasHoldings) {
+          removeFromWatchlist(payload.coinAddress);
+        }
+      }
+    } catch (watchlistErr) {
+      // Non-fatal: don't fail the operation if watchlist update fails
+      // (e.g. zora-intelligence DB not available)
+    }
+
+    return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Operation execution failed";
     return db.updateOperation({

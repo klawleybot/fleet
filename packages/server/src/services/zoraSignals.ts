@@ -42,6 +42,16 @@ function withZoraDb<T>(fn: (db: Database.Database) => T): T {
   }
 }
 
+function withZoraDbWrite<T>(fn: (db: Database.Database) => T): T {
+  const dbPath = ensureDbExists();
+  const db = new Database(dbPath, { fileMustExist: true });
+  try {
+    return fn(db);
+  } finally {
+    db.close();
+  }
+}
+
 function coinUrl(chainId: number | null | undefined, coinAddress: string) {
   const chainSlug = Number(chainId) === 84532 ? "base-sepolia" : "base";
   return `https://zora.co/coin/${chainSlug}:${coinAddress.toLowerCase()}`;
@@ -136,6 +146,46 @@ export function selectSignalCoin(input: {
   const movers = topMovers({ limit: 1, minMomentum: input.minMomentum ?? 0 });
   if (!movers.length) throw new Error("No top-momentum signal candidates found");
   return movers[0]!;
+}
+
+export function getFleetWatchlistName(): string {
+  return process.env.FLEET_WATCHLIST_NAME?.trim() || "Active Positions";
+}
+
+export function addToWatchlist(
+  coinAddress: `0x${string}`,
+  input?: { listName?: string; label?: string; notes?: string },
+): void {
+  const listName = input?.listName ?? getFleetWatchlistName();
+  const addr = coinAddress.toLowerCase();
+  const now = new Date().toISOString();
+
+  withZoraDbWrite((db) => {
+    db.prepare(`
+      INSERT INTO coin_watchlist (list_name, coin_address, label, notes, enabled, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 1, ?, ?)
+      ON CONFLICT(list_name, coin_address) DO UPDATE SET
+        label = COALESCE(excluded.label, coin_watchlist.label),
+        notes = COALESCE(excluded.notes, coin_watchlist.notes),
+        enabled = 1,
+        updated_at = excluded.updated_at
+    `).run(listName, addr, input?.label ?? null, input?.notes ?? null, now, now);
+  });
+}
+
+export function removeFromWatchlist(
+  coinAddress: `0x${string}`,
+  listName?: string,
+): boolean {
+  const list = listName ?? getFleetWatchlistName();
+  const addr = coinAddress.toLowerCase();
+
+  return withZoraDbWrite((db) => {
+    const r = db.prepare(
+      `UPDATE coin_watchlist SET enabled = 0, updated_at = ? WHERE list_name = ? AND lower(coin_address) = ?`,
+    ).run(new Date().toISOString(), list, addr);
+    return r.changes > 0;
+  });
 }
 
 export function isCoinInWatchlist(coinAddress: `0x${string}`, listName?: string): boolean {

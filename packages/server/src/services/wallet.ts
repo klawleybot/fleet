@@ -41,7 +41,7 @@ export async function ensureMasterWallet(): Promise<WalletRecord> {
   });
 }
 
-export async function createFleetWallets(count: number): Promise<WalletRecord[]> {
+export async function createFleetWallets(count: number, fleetName: string): Promise<WalletRecord[]> {
   if (count < 1) {
     throw new Error("count must be at least 1");
   }
@@ -50,24 +50,41 @@ export async function createFleetWallets(count: number): Promise<WalletRecord[]>
   await ensureMasterWallet();
 
   const created: WalletRecord[] = [];
+  // Count existing wallets for this fleet namespace to determine starting index
   const currentWallets = db.listWallets();
-  let fleetIndex = currentWallets.filter((wallet) => !wallet.isMaster).length + 1;
+  const prefix = `${fleetName}-`;
+  const existingForFleet = currentWallets.filter((w) => !w.isMaster && w.name.startsWith(prefix));
+  let fleetIndex = existingForFleet.length + 1;
 
   for (let index = 0; index < count; index += 1) {
-    const walletName = `fleet-${fleetIndex}`;
+    const walletName = `${fleetName}-${fleetIndex}`;
     fleetIndex += 1;
 
     const { owner, smartAccount } = await createSmartAccount(walletName);
-    created.push(
-      db.createWallet({
-        name: walletName,
-        address: smartAccount.address,
-        cdpAccountName: walletName,
-        ownerAddress: owner.address,
-        type: "smart",
-        isMaster: false,
-      }),
+
+    // Check for address collision
+    const existingByAddress = currentWallets.find(
+      (w) => w.address.toLowerCase() === smartAccount.address.toLowerCase(),
     );
+    if (existingByAddress) {
+      throw new Error(
+        `Address collision: derived address ${smartAccount.address} for wallet "${walletName}" ` +
+        `already exists as wallet "${existingByAddress.name}" (id=${existingByAddress.id}). ` +
+        `This indicates a wallet naming conflict.`,
+      );
+    }
+
+    const wallet = db.createWallet({
+      name: walletName,
+      address: smartAccount.address,
+      cdpAccountName: walletName,
+      ownerAddress: owner.address,
+      type: "smart",
+      isMaster: false,
+    });
+    created.push(wallet);
+    // Add to currentWallets so subsequent iterations can detect collisions
+    currentWallets.push(wallet);
   }
 
   return created;

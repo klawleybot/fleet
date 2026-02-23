@@ -10,7 +10,7 @@
  *   fleet-ops fund   [--wallets N] [--amount-eth 0.001]
  *
  * All commands require doppler env:
- *   doppler run --project onchain-tooling --config dev -- tsx src/cli/fleet-ops.ts <command>
+ *   doppler run --project openclaw --config dev -- tsx src/cli/fleet-ops.ts <command>
  */
 
 import { createPublicClient, http, formatEther, parseEther, type Address } from "viem";
@@ -346,9 +346,9 @@ async function handleFleet(args: string[]): Promise<void> {
       const result = await createFleet({
         name,
         walletCount,
-        fundAmountWei: fundEth ? parseEther(fundEth).toString() : undefined,
-        sourceFleetName: sourceFleet,
-        strategyMode: strategy,
+        ...(fundEth && { fundAmountWei: parseEther(fundEth).toString() }),
+        ...(sourceFleet && { sourceFleetName: sourceFleet }),
+        ...(strategy && { strategyMode: strategy }),
       });
 
       console.log(`\n✅ Fleet "${result.fleet.name}" created (cluster ${result.fleet.clusterId})`);
@@ -432,13 +432,14 @@ async function handleFleet(args: string[]): Promise<void> {
           totalAmountInWei: totalWei,
           slippageBps: slippage,
           durationMs,
-          intervals,
+          ...(intervals != null && { intervals }),
           jiggle: !noJiggle,
         });
 
         console.log(`\n✅ Completed ${results.length} trades:`);
         for (const r of results) {
-          console.log(`  wallet #${r.walletId}: ${r.status} — in=${r.amountIn} out=${r.amountOut ?? "?"}`);
+          const detail = r.status === "failed" && r.errorMessage ? ` err=${r.errorMessage.split("\n")[0]}` : "";
+          console.log(`  wallet #${r.walletId}: ${r.status} — in=${r.amountIn} out=${r.amountOut ?? "?"}${detail}`);
         }
       } else {
         const op = requestSupportCoinOperation({
@@ -664,8 +665,8 @@ async function handleFleet(args: string[]): Promise<void> {
       console.log(`Sweeping fleet "${name}"...`);
       const result = await sweepFleet({
         sourceFleetName: name,
-        targetFleetName: toFleet,
-        targetAddress: toAddress,
+        ...(toFleet && { targetFleetName: toFleet }),
+        ...(toAddress && { targetAddress: toAddress }),
       });
 
       console.log(`\n✅ Sweep complete`);
@@ -688,7 +689,6 @@ async function handleFleet(args: string[]): Promise<void> {
   fleet buy  <name> <coin>            — Buy coin with fleet wallets
         --amount-eth 0.01 [--slippage 500] [--over 10m] [--intervals N] [--no-jiggle]
   fleet sell <name> <coin>            — Sell ALL coins from fleet wallets [--slippage 500]
-        --amount-eth 0.01 [--slippage 500] [--over 10m] [--intervals N] [--no-jiggle]
   fleet sweep <name>                  — Sweep ETH back
         [--to-fleet name | --to-address 0x...]
   fleet swing add <name> <coin>       — Add swing config

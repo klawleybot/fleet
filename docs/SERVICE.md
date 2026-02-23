@@ -18,7 +18,7 @@ Use `pm2` or a systemd unit for the fleet server:
 
 ```bash
 # pm2 approach
-pm2 start "doppler run --project onchain-tooling --config dev -- \
+pm2 start "doppler run --project openclaw --config dev -- \
   npx tsx packages/server/src/index.ts" \
   --name fleet-server \
   --log /Users/user/.openclaw/workspace/fleet/logs/fleet.log \
