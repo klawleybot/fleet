@@ -9,6 +9,7 @@ import { db } from "../db/index.js";
 import type { PositionRecord } from "../types.js";
 import { getChainConfig } from "./network.js";
 import { quoteExactInputSingle } from "./v4Quoter.js";
+import { quoteCoinToEth } from "./quoter.js";
 
 // Minimal ABI for balanceOf
 const balanceOfAbi = [
@@ -171,7 +172,13 @@ export async function getFleetStatus(params: {
     }) as unknown as BalanceClient;
   }
 
-  const enriched: WalletPosition[] = [];
+  // Collect on-chain balances first
+  const positionsWithBalances: Array<{
+    pos: PositionRecord;
+    wallet: typeof wallets[0];
+    onChainBalance: bigint | null;
+  }> = [];
+
   for (const pos of positions) {
     const wallet = walletMap.get(pos.walletId);
     if (!wallet) continue;
@@ -184,9 +191,50 @@ export async function getFleetStatus(params: {
         wallet.address,
       );
     }
+    positionsWithBalances.push({ pos, wallet, onChainBalance });
+  }
 
-    // TODO: quote current value via quoter (requires pool params discovery)
-    enriched.push(enrichPosition(pos, wallet.address, onChainBalance, null));
+  // Aggregate holdings per coin for efficient quoting
+  const coinHoldings = new Map<string, bigint>();
+  for (const { pos, onChainBalance } of positionsWithBalances) {
+    const key = pos.coinAddress.toLowerCase();
+    const holdings = onChainBalance ?? BigInt(pos.holdingsRaw);
+    if (holdings > 0n) {
+      coinHoldings.set(key, (coinHoldings.get(key) ?? 0n) + holdings);
+    }
+  }
+
+  // Quote each coin's total holdings → ETH value
+  const coinEthValues = new Map<string, { totalHoldings: bigint; totalEthValue: bigint }>();
+  if (refreshBalances) {
+    for (const [coinAddr, totalHoldings] of coinHoldings) {
+      if (totalHoldings <= 0n) continue;
+      try {
+        const ethValue = await quoteCoinToEth({
+          coinAddress: coinAddr as Address,
+          amount: totalHoldings,
+        });
+        coinEthValues.set(coinAddr, { totalHoldings, totalEthValue: ethValue });
+      } catch {
+        // Quote failed (e.g. no liquidity) — leave unrealized as null
+      }
+    }
+  }
+
+  // Enrich positions with proportional unrealized P&L
+  const enriched: WalletPosition[] = [];
+  for (const { pos, wallet, onChainBalance } of positionsWithBalances) {
+    const key = pos.coinAddress.toLowerCase();
+    const holdings = onChainBalance ?? BigInt(pos.holdingsRaw);
+    let currentValueWei: bigint | null = null;
+
+    const coinValue = coinEthValues.get(key);
+    if (coinValue && coinValue.totalHoldings > 0n && holdings > 0n) {
+      // Proportional share of total quoted value
+      currentValueWei = (coinValue.totalEthValue * holdings) / coinValue.totalHoldings;
+    }
+
+    enriched.push(enrichPosition(pos, wallet.address, onChainBalance, currentValueWei));
   }
 
   // Aggregate per-coin
@@ -199,6 +247,14 @@ export async function getFleetStatus(params: {
       existing.totalReceivedWei = (BigInt(existing.totalReceivedWei) + BigInt(wp.totalReceivedWei)).toString();
       existing.totalHoldings = (BigInt(existing.totalHoldings) + BigInt(wp.holdingsOnChain ?? wp.holdingsDb)).toString();
       existing.totalRealizedPnlWei = (BigInt(existing.totalRealizedPnlWei) + BigInt(wp.realizedPnlWei)).toString();
+      if (wp.unrealizedPnlWei !== null) {
+        const prev = existing.totalUnrealizedPnlWei !== null ? BigInt(existing.totalUnrealizedPnlWei) : 0n;
+        existing.totalUnrealizedPnlWei = (prev + BigInt(wp.unrealizedPnlWei)).toString();
+      }
+      if (wp.currentValueWei !== null) {
+        const prev = existing.totalCurrentValueWei !== null ? BigInt(existing.totalCurrentValueWei) : 0n;
+        existing.totalCurrentValueWei = (prev + BigInt(wp.currentValueWei)).toString();
+      }
       existing.walletCount += 1;
     } else {
       coinMap.set(key, {
