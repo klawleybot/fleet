@@ -750,6 +750,42 @@ async function main() {
         await handleFleet(args.slice(1));
         break;
 
+      case "autonomy-tick": {
+        const { getAutonomyConfig, runAutonomyTick } = await import("../services/autonomy.js");
+        const config = getAutonomyConfig();
+        console.log(`Autonomy config:`);
+        console.log(`  enabled=${config.enabled} clusters=${config.clusterIds.join(",") || "(none)"}`);
+        console.log(`  signal=${config.signalMode} watchlist=${config.watchlistName ?? "(default)"}`);
+        console.log(`  createRequests=${config.createRequests} autoApprove=${config.autoApprovePending}`);
+        console.log(`  pumpThreshold=${process.env.AUTONOMY_PUMP_THRESHOLD ?? "3.0"} dipThreshold=${process.env.AUTONOMY_DIP_THRESHOLD ?? "0.5"}`);
+        console.log(`  ownDiscount=${process.env.AUTONOMY_OWN_DISCOUNT_ENABLED ?? "true"}`);
+        console.log();
+        const result = await runAutonomyTick();
+        console.log(`Tick result:`);
+        console.log(`  created: ${result.createdOperationIds.length} operations [${result.createdOperationIds.join(", ")}]`);
+        console.log(`  executed: ${result.executedOperationIds.length} operations [${result.executedOperationIds.join(", ")}]`);
+        if (result.skipped.length > 0) {
+          console.log(`  skipped: ${result.skipped.length}`);
+          for (const s of result.skipped) {
+            console.log(`    - ${s.reason}${s.operationId ? ` (op #${s.operationId})` : ""}`);
+          }
+        }
+        if (result.errors.length > 0) {
+          console.log(`  errors: ${result.errors.length}`);
+          for (const e of result.errors) {
+            console.log(`    - ${e}`);
+          }
+        }
+        break;
+      }
+
+      case "autonomy-status": {
+        const { getAutonomyStatus } = await import("../services/autonomy.js");
+        const status = getAutonomyStatus();
+        console.log(JSON.stringify(status, null, 2));
+        break;
+      }
+
       default:
         console.log(`Fleet Ops CLI
 
@@ -766,7 +802,11 @@ Fleet Commands:
   fleet status <name> [--refresh]     — Fleet status with positions/P&L
   fleet buy  <name> <coin>            — Buy with fleet [--amount-eth] [--slippage] [--over] [--intervals] [--no-jiggle]
   fleet sell <name> <coin>            — Sell ALL coins from fleet [--slippage 500]
-  fleet sweep <name>                  — Sweep ETH [--to-fleet | --to-address]`);
+  fleet sweep <name>                  — Sweep ETH [--to-fleet | --to-address]
+
+Autonomy Commands:
+  autonomy-tick                       — Run one autonomy tick (observe or execute)
+  autonomy-status                     — Show autonomy config and last tick`);
     }
   } catch (err) {
     console.error("Error:", err instanceof Error ? err.message : err);
