@@ -22,11 +22,11 @@ import { ensurePermit2Approval } from "../services/erc20.js";
 import { getChainConfig } from "../services/network.js";
 import {
   toCoinbaseSmartAccount,
-  createBundlerClient,
   sendUserOperation,
   waitForUserOperationReceipt,
 } from "viem/account-abstraction";
 import { privateKeyToAccount } from "viem/accounts";
+import { createSponsoredBundlerClient } from "../services/bundler/config.js";
 import {
   createFleet,
   getFleetByName,
@@ -132,11 +132,11 @@ async function cmdBuy(coin: Address, amountEth: string, slippageBps: number) {
     throw new Error(`Insufficient ETH. Need ${formatEther(amountIn + parseEther("0.001"))}, have ${formatEther(balance)}`);
   }
 
-  const bundlerClient = createBundlerClient({
+  const bundlerClient = createSponsoredBundlerClient({
     account: smartAccount,
     chain: base,
     client,
-    transport: http(getBundlerUrl()),
+    bundlerUrl: getBundlerUrl(),
   });
 
   console.log("Submitting buy...");
@@ -206,11 +206,11 @@ async function cmdSell(coin: Address, slippageBps: number) {
     poolParamsPerHop: route.sellPoolParams,
   });
 
-  const bundlerClient = createBundlerClient({
+  const bundlerClient = createSponsoredBundlerClient({
     account: smartAccount,
     chain: base,
     client,
-    transport: http(getBundlerUrl()),
+    bundlerUrl: getBundlerUrl(),
   });
 
   const calls = [

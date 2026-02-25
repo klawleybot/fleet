@@ -18,7 +18,7 @@ import {
   waitForUserOperationReceipt,
 } from "viem/account-abstraction";
 import { getChainConfig } from "./network.js";
-import { loadBundlerConfigFromEnv } from "./bundler/config.js";
+import { loadBundlerConfigFromEnv, createSponsoredBundlerClient } from "./bundler/config.js";
 import { getBundlerRouter } from "./bundler/index.js";
 import { resolveDeterministicBuyRoute, resolveDeterministicSellRoute } from "./swapRoute.js";
 import { resolveCoinRoute, type CoinRouteClient } from "./coinRoute.js";
@@ -189,12 +189,10 @@ async function submitUserOperationViaRouter(input: {
 
   try {
     const account = await getLocalSmartAccount(input.smartAccountName);
-    const bundlerCfg = loadBundlerConfigFromEnv();
-    const bundlerClient = createBundlerClient({
+    const bundlerClient = createSponsoredBundlerClient({
+      account,
       chain: getChainCfg().chain,
       client: localPublicClient(),
-      transport: http(bundlerCfg.primary.rpcUrl),
-      account,
     });
 
     const userOpHash = await sendUserOperation(bundlerClient, {

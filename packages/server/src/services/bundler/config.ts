@@ -1,3 +1,6 @@
+import { createBundlerClient, createPaymasterClient } from "viem/account-abstraction";
+import { http, type Chain, type Client } from "viem";
+import type { SmartAccount } from "viem/account-abstraction";
 import { getChainConfig } from "../network.js";
 import type { BundlerRouterConfig, Hex } from "./types.js";
 
@@ -89,4 +92,39 @@ export function loadBundlerConfigFromEnv(): BundlerConfig {
 
 export function getBundlerChainId(): number {
   return getChainConfig().chainId;
+}
+
+/**
+ * Creates a bundler client with optional Pimlico gas sponsorship.
+ * When PIMLICO_GAS_POLICY_ID is set, user operations are sponsored
+ * (no per-wallet ETH needed for gas).
+ */
+export function createSponsoredBundlerClient(opts: {
+  account: SmartAccount;
+  chain: Chain;
+  client: Client;
+  bundlerUrl?: string;
+}) {
+  const bundlerCfg = loadBundlerConfigFromEnv();
+  const rpcUrl = opts.bundlerUrl ?? bundlerCfg.primary.rpcUrl;
+  const gasPolicyId = process.env.PIMLICO_GAS_POLICY_ID?.trim();
+
+  const paymasterOpts = gasPolicyId
+    ? {
+        paymaster: createPaymasterClient({
+          transport: http(rpcUrl),
+        }),
+        paymasterContext: {
+          sponsorshipPolicyId: gasPolicyId,
+        },
+      }
+    : {};
+
+  return createBundlerClient({
+    account: opts.account,
+    chain: opts.chain,
+    client: opts.client,
+    transport: http(rpcUrl),
+    ...paymasterOpts,
+  });
 }
