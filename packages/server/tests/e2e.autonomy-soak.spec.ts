@@ -97,7 +97,17 @@ function createZoraFixtureDb(filePath: string, chainId: number): void {
       coin_address TEXT PRIMARY KEY,
       momentum_score REAL,
       swap_count_24h INTEGER,
-      net_flow_usdc_24h REAL
+      net_flow_usdc_24h REAL,
+      swap_count_1h INTEGER DEFAULT 0,
+      unique_traders_1h INTEGER DEFAULT 0,
+      buy_count_1h INTEGER DEFAULT 0,
+      sell_count_1h INTEGER DEFAULT 0,
+      buy_volume_usdc_1h REAL DEFAULT 0,
+      sell_volume_usdc_1h REAL DEFAULT 0,
+      net_flow_usdc_1h REAL DEFAULT 0,
+      swap_count_prev_1h INTEGER DEFAULT 0,
+      momentum_score_1h REAL DEFAULT 0,
+      momentum_acceleration_1h REAL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS coin_watchlist (
