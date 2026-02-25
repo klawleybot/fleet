@@ -1,9 +1,13 @@
 import { db } from "../db/index.js";
 import { evaluateAutoApproval, getAutoApprovalPolicy } from "./approval.js";
 import { approveAndExecuteOperation, requestSupportFromZoraSignal, requestExitCoinOperation, requestSupportCoinOperation } from "./operations.js";
+import { getWalletBudgets } from "./balance.js";
 import type { OperationRecord, StrategyMode } from "../types.js";
 import type { ZoraSignalMode } from "./zoraSignals.js";
 import { detectPumpSignals, detectDipSignals, discountOwnActivity } from "./zoraSignals.js";
+
+/** Max age (seconds) an operation can sit in 'executing' before we consider it stale and mark it failed. */
+const STALE_EXECUTING_TIMEOUT_SEC = 300; // 5 minutes
 
 interface AutonomyConfig {
   enabled: boolean;
@@ -127,6 +131,13 @@ export async function runAutonomyTick(): Promise<TickResult> {
       return result;
     }
 
+    // --- Housekeeping: mark stale 'executing' ops as failed ---
+    const staleOps = db.listStaleExecutingOperations(STALE_EXECUTING_TIMEOUT_SEC);
+    for (const staleOp of staleOps) {
+      db.updateOperationStatus(staleOp.id, "failed", `Timed out after ${STALE_EXECUTING_TIMEOUT_SEC}s in executing state`);
+      result.errors.push(`operation ${staleOp.id} marked failed (stale executing)`);
+    }
+
     if (config.clusterIds.length === 0) {
       result.skipped.push({ reason: "AUTONOMY_CLUSTER_IDS is empty" });
     } else if (config.createRequests) {
@@ -135,6 +146,32 @@ export async function runAutonomyTick(): Promise<TickResult> {
           if (db.hasOpenOperationForCluster(clusterId)) {
             result.skipped.push({ reason: `cluster ${clusterId} has open operation` });
             continue;
+          }
+
+          // Pre-check cooldown before creating an op that would just get stuck
+          const lastOpAge = db.getLatestClusterOperationAgeSec(clusterId);
+          const cooldownSec = parseInt(process.env.CLUSTER_COOLDOWN_SEC ?? "45", 10);
+          if (lastOpAge !== null && lastOpAge < cooldownSec) {
+            result.skipped.push({ reason: `cluster ${clusterId} cooldown (${lastOpAge}s/${cooldownSec}s)` });
+            continue;
+          }
+
+          // Pre-check cluster buy budget — skip if wallets have no ETH
+          // (skipped in mock mode since test wallets have no real balance)
+          if (process.env.CDP_MOCK_MODE !== "1") {
+            const clusterWalletRows = db.listClusterWalletDetails(clusterId);
+            const budgets = await getWalletBudgets(
+              clusterWalletRows.map((w) => ({ id: w.id, address: w.address as `0x${string}` })),
+            );
+            const requestedWei = BigInt(config.totalAmountWei);
+            if (budgets.totalBudget < requestedWei / 2n) {
+              const budgetEth = (Number(budgets.totalBudget) / 1e18).toFixed(6);
+              const requestedEth = (Number(requestedWei) / 1e18).toFixed(6);
+              result.skipped.push({
+                reason: `cluster ${clusterId} insufficient buy budget: ${budgets.fundedCount}/${budgets.wallets.length} wallets funded, ${budgetEth}/${requestedEth} ETH`,
+              });
+              continue;
+            }
           }
 
           const operation = requestSupportFromZoraSignal({
@@ -235,6 +272,17 @@ export async function runAutonomyTick(): Promise<TickResult> {
           if (db.hasOpenOperationForCluster(clusterId)) {
             result.skipped.push({ reason: `cluster ${clusterId} has open operation (dip buy)` });
             break;
+          }
+
+          // Dip buys need budget — check cluster wallets (skip in mock mode)
+          if (process.env.CDP_MOCK_MODE !== "1") {
+            const dipBudgets = await getWalletBudgets(
+              clusterWallets.map((w) => ({ id: w.id, address: w.address as `0x${string}` })),
+            );
+            if (dipBudgets.totalBudget < BigInt(config.totalAmountWei) / 2n) {
+              result.skipped.push({ reason: `cluster ${clusterId} no budget for dip buy (${dipBudgets.fundedCount}/${dipBudgets.wallets.length} funded)` });
+              break;
+            }
           }
 
           try {

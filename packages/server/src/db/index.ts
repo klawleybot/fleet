@@ -552,6 +552,22 @@ export const db = {
     return Boolean(row?.ok);
   },
 
+  listStaleExecutingOperations(timeoutSec: number): OperationRecord[] {
+    const rows = getSqlite()
+      .prepare(`
+        SELECT * FROM operations
+        WHERE status = 'executing'
+          AND CAST((strftime('%s','now') - strftime('%s', updated_at)) AS INTEGER) > ?
+        ORDER BY id ASC
+      `)
+      .all(timeoutSec) as OperationRow[];
+    return rows.map(mapOperation);
+  },
+
+  updateOperationStatus(id: number, status: OperationStatus, errorMessage?: string): OperationRecord {
+    return this.updateOperation({ id, status, errorMessage: errorMessage ?? null });
+  },
+
   listOperationsByStatus(status: OperationStatus, limit = 100): OperationRecord[] {
     const rows = getSqlite()
       .prepare("SELECT * FROM operations WHERE status = ? ORDER BY id ASC LIMIT ?")

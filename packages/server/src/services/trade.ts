@@ -2,6 +2,7 @@ import pLimit from "p-limit";
 import { db } from "../db/index.js";
 import { swapFromSmartAccount } from "./cdp.js";
 import { recordTradePosition } from "./monitor.js";
+import { getWalletBudgets, MIN_BUY_BALANCE_WEI } from "./balance.js";
 import type { StrategyMode, TradeRecord } from "../types.js";
 
 const NATIVE_ETH = "0x0000000000000000000000000000000000000000" as const;
@@ -195,7 +196,48 @@ export async function strategySwap(input: {
     throw new Error("slippageBps must be between 1 and 2000.");
   }
 
-  const walletCount = input.walletIds.length;
+  const isBuy = isEthLike(input.fromToken);
+
+  // ---- Pre-flight balance check for buys ----
+  // Only trade with wallets that have enough ETH.
+  // Skip in mock mode (tests) since mock wallets have no real balance.
+  const isMockMode = process.env.CDP_MOCK_MODE === "1";
+  let eligibleWalletIds = input.walletIds;
+  if (isBuy && !isMockMode) {
+    const walletRows = input.walletIds.map((id) => {
+      const w = db.getWalletById(id);
+      if (!w) throw new Error(`Wallet ${id} not found`);
+      return { id: w.id, address: w.address as `0x${string}` };
+    });
+
+    const budgets = await getWalletBudgets(walletRows);
+    const perWalletMin = input.totalAmountInWei / BigInt(input.walletIds.length);
+    // A wallet is eligible if it has at least the per-wallet share (or MIN_BUY_BALANCE_WEI, whichever is larger)
+    const threshold = perWalletMin > MIN_BUY_BALANCE_WEI ? perWalletMin : MIN_BUY_BALANCE_WEI;
+
+    eligibleWalletIds = budgets.wallets
+      .filter((w) => w.balance >= threshold)
+      .map((w) => w.walletId);
+
+    if (eligibleWalletIds.length === 0) {
+      throw new Error(
+        `No wallets have sufficient ETH for buy. ` +
+        `${budgets.fundedCount}/${budgets.wallets.length} funded, ` +
+        `totalBudget=${budgets.totalBudget}, ` +
+        `needed=${input.totalAmountInWei}`
+      );
+    }
+
+    // Cap totalAmount to actual available budget
+    const cappedAmount = budgets.totalBudget < input.totalAmountInWei
+      ? budgets.totalBudget
+      : input.totalAmountInWei;
+
+    // Re-assign amount to only spend what's available across eligible wallets
+    input = { ...input, totalAmountInWei: cappedAmount, walletIds: eligibleWalletIds };
+  }
+
+  const walletCount = eligibleWalletIds.length;
   const useJiggle = input.jiggle !== false; // default on
   const amounts = useJiggle
     ? jiggleAmounts(input.totalAmountInWei, walletCount, input.jiggleFactor ?? 0.15)
