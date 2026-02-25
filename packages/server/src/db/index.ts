@@ -226,11 +226,28 @@ function mapOperation(row: OperationRow): OperationRecord {
 
 let _sqlite: Database.Database | null = null;
 
+/**
+ * Resolve the DB file path. Priority:
+ *   1. SQLITE_PATH env var (absolute or relative — if relative, resolved from cwd)
+ *   2. Default: <package-root>/.data/pump-it-up.db
+ *
+ * The default is anchored to the package directory via import.meta.url so the
+ * resolved path is stable regardless of which directory the process starts in.
+ */
+function resolveDbPath(): string {
+  const envPath = process.env.SQLITE_PATH?.trim();
+  if (envPath) {
+    // Absolute paths pass through; relative paths resolve from cwd (explicit choice by caller)
+    return path.resolve(envPath);
+  }
+  // Fallback: <packages/server>/.data/pump-it-up.db
+  const packageRoot = path.resolve(new URL(".", import.meta.url).pathname, "..", "..");
+  return path.join(packageRoot, ".data", "pump-it-up.db");
+}
+
 function getSqlite(): Database.Database {
   if (_sqlite) return _sqlite;
-  const dbPath = process.env.SQLITE_PATH ?? path.resolve(
-    new URL(".", import.meta.url).pathname, "..", "..", ".data", "pump-it-up.db",
-  );
+  const dbPath = resolveDbPath();
   const dbDirectory = path.dirname(dbPath);
   fs.mkdirSync(dbDirectory, { recursive: true });
   _sqlite = new Database(dbPath);

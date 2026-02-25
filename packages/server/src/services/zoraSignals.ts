@@ -17,7 +17,9 @@ export interface ZoraSignalCoin {
 }
 
 function defaultDbPath() {
-  return path.resolve(process.cwd(), "../../zora-intelligence/data/zora-intelligence.db");
+  // Resolve relative to the package root (packages/server), not cwd.
+  const packageRoot = path.resolve(new URL(".", import.meta.url).pathname, "..", "..");
+  return path.resolve(packageRoot, "../../zora-intelligence/data/zora-intelligence.db");
 }
 
 function getDbPath() {
