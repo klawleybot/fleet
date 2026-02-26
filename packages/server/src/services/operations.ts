@@ -1,6 +1,6 @@
 import { isAddress } from "viem";
 import { db } from "../db/index.js";
-import { assertExecutionAllowed, assertFundingRequestAllowed, assertTradeRequestAllowed } from "./policy.js";
+import { assertExecutionAllowed, assertFundingRequestAllowed, assertTradeRequestAllowed, getPolicy } from "./policy.js";
 import { distributeFunding } from "./funding.js";
 import { strategySwap } from "./trade.js";
 import { addToWatchlist, removeFromWatchlist, getFleetWatchlistName, selectSignalCoin, topMovers, watchlistSignals, type ZoraSignalCoin, type ZoraSignalMode } from "./zoraSignals.js";
@@ -98,12 +98,12 @@ export function requestExitCoinOperation(input: {
   const totalAmountWei = BigInt(input.totalAmountWei);
   const { cluster, walletIds } = ensureClusterHasWallets(input.clusterId);
 
-  assertTradeRequestAllowed({
-    coinAddress: input.coinAddress,
-    totalAmountWei,
-    walletCount: walletIds.length,
-    slippageBps: input.slippageBps,
-  });
+  // EXIT_COIN: skip MAX_TRADE_WEI / MAX_PER_WALLET_WEI checks since
+  // totalAmountWei is a raw token amount, not ETH. Only validate slippage + coin allowlist.
+  const policy = getPolicy();
+  if (input.slippageBps < 1 || input.slippageBps > policy.maxSlippageBps) {
+    throw new Error(`slippageBps must be between 1 and ${policy.maxSlippageBps}`);
+  }
 
   const payload: TradePayload = {
     coinAddress: input.coinAddress,
@@ -217,14 +217,18 @@ export async function approveAndExecuteOperation(input: {
 
     const payload = JSON.parse(operation.payloadJson) as TradePayload;
     const totalAmountWei = BigInt(payload.totalAmountWei);
-    assertTradeRequestAllowed({
-      coinAddress: payload.coinAddress,
-      totalAmountWei,
-      walletCount: walletIds.length,
-      slippageBps: payload.slippageBps,
-    });
-
     const isBuy = operation.type === "SUPPORT_COIN";
+
+    // Only enforce MAX_TRADE_WEI / MAX_PER_WALLET_WEI on buys (ETH outflow).
+    // Sells pass raw token amounts which are not comparable to ETH limits.
+    if (isBuy) {
+      assertTradeRequestAllowed({
+        coinAddress: payload.coinAddress,
+        totalAmountWei,
+        walletCount: walletIds.length,
+        slippageBps: payload.slippageBps,
+      });
+    }
     const records = await strategySwap({
       walletIds,
       fromToken: isBuy ? WETH_BASE : payload.coinAddress,
