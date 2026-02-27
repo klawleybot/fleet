@@ -672,6 +672,26 @@ export async function swapFromSmartAccount(input: {
 
     calls.push({ to: encoded.to, value: encoded.value, data: encoded.data });
 
+    // ---- Pre-submission simulation (free eth_call) ----
+    // Simulate the swap from the SA address before submitting the UserOp.
+    // Catches reverts (insufficient balance, pool errors) without paying
+    // the bundler/paymaster for a failed estimation attempt.
+    const smartAccountForSim = await getLocalSmartAccount(input.smartAccountName);
+    const simClient = localPublicClient();
+    for (const call of calls) {
+      try {
+        await simClient.call({
+          account: smartAccountForSim.address,
+          to: call.to,
+          value: call.value,
+          data: call.data ?? "0x",
+        });
+      } catch (simError) {
+        const simMsg = simError instanceof Error ? simError.message : String(simError);
+        throw new Error(`Simulation reverted for ${input.smartAccountName} — skipping UserOp: ${simMsg.slice(0, 200)}`);
+      }
+    }
+
     const opResult = await submitUserOperationViaRouter({
       smartAccountName: input.smartAccountName,
       calls,

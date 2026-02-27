@@ -164,11 +164,13 @@ export async function runAutonomyTick(): Promise<TickResult> {
               clusterWalletRows.map((w) => ({ id: w.id, address: w.address as `0x${string}` })),
             );
             const requestedWei = BigInt(config.totalAmountWei);
-            if (budgets.totalBudget < requestedWei / 2n) {
-              const budgetEth = (Number(budgets.totalBudget) / 1e18).toFixed(6);
-              const requestedEth = (Number(requestedWei) / 1e18).toFixed(6);
+            const perWalletTarget = requestedWei / BigInt(clusterWalletRows.length || 1);
+            // Count wallets that can actually cover their per-wallet share
+            const tradeReady = budgets.wallets.filter((w) => w.balance >= perWalletTarget).length;
+            if (tradeReady === 0) {
+              const maxBal = budgets.wallets.reduce((m, w) => w.balance > m ? w.balance : m, 0n);
               result.skipped.push({
-                reason: `cluster ${clusterId} insufficient buy budget: ${budgets.fundedCount}/${budgets.wallets.length} wallets funded, ${budgetEth}/${requestedEth} ETH`,
+                reason: `cluster ${clusterId} no wallets can cover per-wallet amount (need ${(Number(perWalletTarget) / 1e18).toFixed(6)} ETH/wallet, max balance ${(Number(maxBal) / 1e18).toFixed(6)} ETH)`,
               });
               continue;
             }
@@ -279,8 +281,10 @@ export async function runAutonomyTick(): Promise<TickResult> {
             const dipBudgets = await getWalletBudgets(
               clusterWallets.map((w) => ({ id: w.id, address: w.address as `0x${string}` })),
             );
-            if (dipBudgets.totalBudget < BigInt(config.totalAmountWei) / 2n) {
-              result.skipped.push({ reason: `cluster ${clusterId} no budget for dip buy (${dipBudgets.fundedCount}/${dipBudgets.wallets.length} funded)` });
+            const dipPerWallet = BigInt(config.totalAmountWei) / BigInt(clusterWallets.length || 1);
+            const dipReady = dipBudgets.wallets.filter((w) => w.balance >= dipPerWallet).length;
+            if (dipReady === 0) {
+              result.skipped.push({ reason: `cluster ${clusterId} no wallets can cover dip buy (need ${(Number(dipPerWallet) / 1e18).toFixed(6)} ETH/wallet)` });
               break;
             }
           }
