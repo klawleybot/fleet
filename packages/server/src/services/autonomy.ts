@@ -1,6 +1,6 @@
 import { db } from "../db/index.js";
 import { evaluateAutoApproval, getAutoApprovalPolicy } from "./approval.js";
-import { approveAndExecuteOperation, requestSupportFromZoraSignal, requestExitCoinOperation, requestSupportCoinOperation } from "./operations.js";
+import { approveAndExecuteOperation, requestExitCoinOperation, requestSupportCoinOperation } from "./operations.js";
 import { getWalletBudgets } from "./balance.js";
 import type { OperationRecord, StrategyMode } from "../types.js";
 import type { ZoraSignalMode } from "./zoraSignals.js";
@@ -23,6 +23,9 @@ interface AutonomyConfig {
   requestedBy: string;
   createRequests: boolean;
   autoApprovePending: boolean;
+  pumpThreshold: number;
+  dipThreshold: number;
+  ownDiscountEnabled: boolean;
 }
 
 interface TickResult {
@@ -140,58 +143,6 @@ export async function runAutonomyTick(): Promise<TickResult> {
 
     if (config.clusterIds.length === 0) {
       result.skipped.push({ reason: "AUTONOMY_CLUSTER_IDS is empty" });
-    } else if (config.createRequests) {
-      for (const clusterId of config.clusterIds) {
-        try {
-          if (db.hasOpenOperationForCluster(clusterId)) {
-            result.skipped.push({ reason: `cluster ${clusterId} has open operation` });
-            continue;
-          }
-
-          // Pre-check cooldown before creating an op that would just get stuck
-          const lastOpAge = db.getLatestClusterOperationAgeSec(clusterId);
-          const cooldownSec = parseInt(process.env.CLUSTER_COOLDOWN_SEC ?? "45", 10);
-          if (lastOpAge !== null && lastOpAge < cooldownSec) {
-            result.skipped.push({ reason: `cluster ${clusterId} cooldown (${lastOpAge}s/${cooldownSec}s)` });
-            continue;
-          }
-
-          // Pre-check cluster buy budget — skip if wallets have no ETH
-          // (skipped in mock mode since test wallets have no real balance)
-          if (process.env.CDP_MOCK_MODE !== "1") {
-            const clusterWalletRows = db.listClusterWalletDetails(clusterId);
-            const budgets = await getWalletBudgets(
-              clusterWalletRows.map((w) => ({ id: w.id, address: w.address as `0x${string}` })),
-            );
-            const requestedWei = BigInt(config.totalAmountWei);
-            const perWalletTarget = requestedWei / BigInt(clusterWalletRows.length || 1);
-            // Count wallets that can actually cover their per-wallet share
-            const tradeReady = budgets.wallets.filter((w) => w.balance >= perWalletTarget).length;
-            if (tradeReady === 0) {
-              const maxBal = budgets.wallets.reduce((m, w) => w.balance > m ? w.balance : m, 0n);
-              result.skipped.push({
-                reason: `cluster ${clusterId} no wallets can cover per-wallet amount (need ${(Number(perWalletTarget) / 1e18).toFixed(6)} ETH/wallet, max balance ${(Number(maxBal) / 1e18).toFixed(6)} ETH)`,
-              });
-              continue;
-            }
-          }
-
-          const operation = requestSupportFromZoraSignal({
-            clusterId,
-            mode: config.signalMode,
-            ...(config.watchlistName ? { listName: config.watchlistName } : {}),
-            ...(config.minMomentum !== null ? { minMomentum: config.minMomentum } : {}),
-            totalAmountWei: config.totalAmountWei,
-            slippageBps: config.slippageBps,
-            ...(config.strategyMode ? { strategyMode: config.strategyMode } : {}),
-            requestedBy: config.requestedBy,
-          });
-          result.createdOperationIds.push(operation.id);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "unknown cluster creation error";
-          result.errors.push(`cluster ${clusterId}: ${message}`);
-        }
-      }
     }
 
     // --- P4: Momentum intelligence — pump/dip detection ---
@@ -253,7 +204,9 @@ export async function runAutonomyTick(): Promise<TickResult> {
           }
         }
 
-        // Dip detection: check for buy opportunities
+        // Dip detection: buy opportunities on coins showing genuine dips
+        // A dip = acceleration ≤ threshold AND negative net flow (people selling, price dropping).
+        // We buy the dip expecting a reversal. This is the ONLY buy path.
         const previouslyTraded = [...new Set(positions.map((p) => p.coinAddress))];
         const dipSignals = detectDipSignals({
           previouslyTradedAddresses: previouslyTraded,
