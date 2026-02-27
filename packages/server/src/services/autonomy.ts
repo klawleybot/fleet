@@ -183,10 +183,27 @@ export async function runAutonomyTick(): Promise<TickResult> {
             }
 
             try {
-              // Find total holdings to sell
+              // Find total holdings to sell — skip if value too low to justify gas
               const coinPositions = positions.filter((p) => p.coinAddress === signal.coinAddress && BigInt(p.holdingsRaw) > 0n);
               const totalHoldings = coinPositions.reduce((sum, p) => sum + BigInt(p.holdingsRaw), 0n);
               if (totalHoldings <= 0n) continue;
+
+              // Estimate value: use quoter to check if holdings are worth selling
+              const minSellValueWei = BigInt(process.env.MIN_SELL_VALUE_WEI ?? "500000000000000"); // 0.0005 ETH default
+              try {
+                const { quoteCoinToEth } = await import("./quoter.js");
+                const estValue = await quoteCoinToEth({ coinAddress: signal.coinAddress as `0x${string}`, amount: totalHoldings });
+                if (estValue < minSellValueWei) {
+                  result.skipped.push({
+                    reason: `cluster ${clusterId} ${signal.coinAddress.slice(0,10)} holdings worth ~${(Number(estValue) / 1e18).toFixed(6)} ETH — below min sell value ${(Number(minSellValueWei) / 1e18).toFixed(4)} ETH`,
+                  });
+                  continue;
+                }
+              } catch {
+                // If quoting fails, skip the sell (can't confirm value)
+                result.skipped.push({ reason: `cluster ${clusterId} ${signal.coinAddress.slice(0,10)} quote failed — skipping sell` });
+                continue;
+              }
 
               const operation = requestExitCoinOperation({
                 clusterId,
