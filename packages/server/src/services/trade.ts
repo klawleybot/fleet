@@ -197,12 +197,46 @@ export async function strategySwap(input: {
   }
 
   const isBuy = isEthLike(input.fromToken);
+  const isSell = !isBuy;
+  const isMockMode = process.env.CDP_MOCK_MODE === "1";
+
+  // ---- Pre-flight holdings check for sells ----
+  // Only include wallets that actually hold tokens. Skips dust wallets
+  // and wallets already fully sold, avoiding wasted UserOp attempts.
+  const MIN_SELL_HOLDINGS = 100n; // skip wallets with fewer tokens than this
+  let eligibleWalletIds = input.walletIds;
+  if (isSell && !isMockMode) {
+    const coinAddress = input.fromToken.toLowerCase();
+    const withHoldings: Array<{ walletId: number; holdings: bigint }> = [];
+
+    for (const wid of input.walletIds) {
+      const positions = db.listPositionsByWallet(wid);
+      const pos = positions.find((p) => p.coinAddress.toLowerCase() === coinAddress);
+      const holdings = pos ? BigInt(pos.holdingsRaw) : 0n;
+      if (holdings >= MIN_SELL_HOLDINGS) {
+        withHoldings.push({ walletId: wid, holdings });
+      }
+    }
+
+    if (withHoldings.length === 0) {
+      throw new Error(
+        `No wallets hold sufficient tokens to sell. ` +
+        `${input.walletIds.length} wallets checked, 0 above ${MIN_SELL_HOLDINGS} threshold`
+      );
+    }
+
+    eligibleWalletIds = withHoldings.map((w) => w.walletId);
+
+    // Cap total sell amount to what wallets actually hold
+    const totalHoldings = withHoldings.reduce((sum, w) => sum + w.holdings, 0n);
+    const cappedAmount = totalHoldings < input.totalAmountInWei ? totalHoldings : input.totalAmountInWei;
+
+    input = { ...input, totalAmountInWei: cappedAmount, walletIds: eligibleWalletIds };
+  }
 
   // ---- Pre-flight balance check for buys ----
   // Only trade with wallets that have enough ETH for their share.
   // Skip in mock mode (tests) since mock wallets have no real balance.
-  const isMockMode = process.env.CDP_MOCK_MODE === "1";
-  let eligibleWalletIds = input.walletIds;
   if (isBuy && !isMockMode) {
     const walletRows = input.walletIds.map((id) => {
       const w = db.getWalletById(id);
