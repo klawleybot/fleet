@@ -34,7 +34,7 @@ function parseSet(value: string | undefined): Set<string> {
 
 function parseOperationSet(value: string | undefined): Set<OperationType> {
   const allowed: OperationType[] = ["FUNDING_REQUEST", "SUPPORT_COIN", "EXIT_COIN"];
-  if (!value?.trim()) return new Set(["SUPPORT_COIN"]);
+  if (!value?.trim()) return new Set(["SUPPORT_COIN", "EXIT_COIN"]);
   const raw = value.split(",").map((v) => v.trim().toUpperCase());
   return new Set(raw.filter((v): v is OperationType => allowed.includes(v as OperationType)));
 }
@@ -85,7 +85,9 @@ export function evaluateAutoApproval(operation: OperationRecord): { allow: boole
     return { allow: false, reason: `Funding amount exceeds AUTO_APPROVE_MAX_FUNDING_WEI (${policy.maxFundingWei.toString()})` };
   }
 
-  if ((operation.type === "SUPPORT_COIN" || operation.type === "EXIT_COIN") && amountWei > policy.maxTradeWei) {
+  // Only enforce maxTradeWei on buys (SUPPORT_COIN). EXIT_COIN amounts are raw
+  // token quantities, not ETH — comparing them to an ETH cap is meaningless.
+  if (operation.type === "SUPPORT_COIN" && amountWei > policy.maxTradeWei) {
     return { allow: false, reason: `Trade amount exceeds AUTO_APPROVE_MAX_TRADE_WEI (${policy.maxTradeWei.toString()})` };
   }
 
