@@ -9,3 +9,5 @@ dist
 *.db-wal
 coverage
 logs/*.log
+.data/
+**/.data/
