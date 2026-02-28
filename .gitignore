@@ -8,6 +8,6 @@ dist
 *.db-shm
 *.db-wal
 coverage
-logs/*.log
+logs/
 .data/
 **/.data/

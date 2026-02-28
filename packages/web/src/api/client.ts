@@ -5,10 +5,16 @@ import type {
   FundingRecord,
   GlobalDashboard,
   HealthResponse,
+  IntelAlert,
+  IntelAnalytics,
+  IntelCoin,
+  IntelligenceStatus,
+  IntelligenceSummary,
   OperationRecord,
   PositionRecord,
   TradeRecord,
   Wallet,
+  WatchlistItem,
 } from "../types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4020";
@@ -235,4 +241,69 @@ export async function stopAutonomy(): Promise<AutonomyStatus> {
 
 export async function runAutonomyTick(): Promise<unknown> {
   return request("/autonomy/tick", { method: "POST", body: JSON.stringify({}) });
+}
+
+// ============================================================
+// Intelligence
+// ============================================================
+
+export async function fetchIntelligenceStatus(): Promise<IntelligenceStatus> {
+  return request<IntelligenceStatus>("/intelligence/status");
+}
+
+export async function fetchIntelligenceSummary(): Promise<IntelligenceSummary> {
+  return request<IntelligenceSummary>("/intelligence/summary");
+}
+
+export async function startIntelligence(intervalSec?: number): Promise<IntelligenceStatus> {
+  return request<IntelligenceStatus>("/intelligence/start", {
+    method: "POST",
+    body: JSON.stringify(intervalSec !== undefined ? { intervalSec } : {}),
+  });
+}
+
+export async function stopIntelligence(): Promise<IntelligenceStatus> {
+  return request<IntelligenceStatus>("/intelligence/stop", { method: "POST", body: JSON.stringify({}) });
+}
+
+export async function runIntelligenceTick(): Promise<unknown> {
+  return request("/intelligence/tick", { method: "POST", body: JSON.stringify({}) });
+}
+
+export async function fetchRecentCoins(limit = 20): Promise<IntelCoin[]> {
+  const payload = await request<{ coins: IntelCoin[] }>(`/intelligence/coins/recent?limit=${limit}`);
+  return payload.coins;
+}
+
+export async function fetchTopCoins(limit = 20): Promise<IntelCoin[]> {
+  const payload = await request<{ coins: IntelCoin[] }>(`/intelligence/coins/top?limit=${limit}`);
+  return payload.coins;
+}
+
+export async function fetchTopAnalytics(limit = 20): Promise<IntelAnalytics[]> {
+  const payload = await request<{ analytics: IntelAnalytics[] }>(`/intelligence/analytics?limit=${limit}`);
+  return payload.analytics;
+}
+
+export async function fetchIntelAlerts(limit = 50): Promise<IntelAlert[]> {
+  const payload = await request<{ alerts: IntelAlert[] }>(`/intelligence/alerts?limit=${limit}`);
+  return payload.alerts;
+}
+
+export async function fetchWatchlist(listName = "default"): Promise<WatchlistItem[]> {
+  const payload = await request<{ items: WatchlistItem[] }>(`/intelligence/watchlist?listName=${encodeURIComponent(listName)}`);
+  return payload.items;
+}
+
+export async function addToIntelWatchlist(coinAddress: string, listName?: string, label?: string): Promise<unknown> {
+  return request("/intelligence/watchlist", {
+    method: "POST",
+    body: JSON.stringify({ coinAddress, listName, label }),
+  });
+}
+
+export async function removeFromIntelWatchlist(coinAddress: string, listName = "default"): Promise<unknown> {
+  return request(`/intelligence/watchlist/${encodeURIComponent(coinAddress)}?listName=${encodeURIComponent(listName)}`, {
+    method: "DELETE",
+  });
 }

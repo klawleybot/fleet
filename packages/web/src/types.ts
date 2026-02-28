@@ -165,6 +165,94 @@ export interface AutonomyStatus {
 }
 
 // ============================================================
+// Intelligence
+// ============================================================
+
+export interface IntelligenceStatus {
+  running: boolean;
+  intervalSec: number;
+  isTicking: boolean;
+  lastTick: {
+    syncedRecent: number;
+    syncedTop: number;
+    swaps: number;
+    clusters: number;
+    analytics: number;
+    alerts: number;
+    startedAt: string;
+    finishedAt: string;
+    errors: string[];
+  } | null;
+}
+
+export interface IntelligenceSummary {
+  coinCount: number;
+  alertCount: number;
+  watchlistCount: number;
+  status: IntelligenceStatus;
+}
+
+export interface IntelCoin {
+  address: string;
+  symbol: string | null;
+  name: string | null;
+  created_at: string | null;
+  volume_24h: number;
+  market_cap: number;
+  coin_url: string;
+}
+
+export interface IntelAnalytics {
+  coin_address: string;
+  symbol: string | null;
+  name: string | null;
+  market_cap: number | null;
+  volume_24h: number | null;
+  swap_count_1h: number;
+  unique_traders_1h: number;
+  buy_count_1h: number;
+  sell_count_1h: number;
+  buy_volume_usdc_1h: number;
+  sell_volume_usdc_1h: number;
+  net_flow_usdc_1h: number;
+  momentum_score_1h: number;
+  momentum_acceleration_1h: number;
+  swap_count_24h: number;
+  unique_traders_24h: number;
+  net_flow_usdc_24h: number;
+  momentum_score: number;
+  coin_url: string;
+}
+
+export interface IntelAlert {
+  type: string;
+  entity_id: string | null;
+  severity: string;
+  message: string;
+  created_at: string;
+  coin_url: string | null;
+}
+
+export interface WatchlistItem {
+  list_name: string;
+  coin_address: string;
+  label: string | null;
+  notes: string | null;
+  enabled: number;
+  updated_at: string;
+  symbol: string | null;
+  name: string | null;
+  volume_24h: number | null;
+  swap_count_1h: number | null;
+  net_flow_usdc_1h: number | null;
+  momentum_score_1h: number | null;
+  momentum_acceleration_1h: number | null;
+  swap_count_24h: number | null;
+  momentum_score: number | null;
+  coin_url: string;
+}
+
+// ============================================================
 // Health
 // ============================================================
 

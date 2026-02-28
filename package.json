@@ -18,6 +18,11 @@
     "test:e2e:base": "APP_NETWORK=base yarn test:e2e",
     "test:e2e:base-sepolia": "APP_NETWORK=base-sepolia yarn test:e2e",
     "test:e2e:doppler": "doppler run --project openclaw --config dev -- yarn test:e2e:base && doppler run --project openclaw --config dev -- yarn test:e2e:base-sepolia",
-    "ci": "yarn workspace @pump-it-up/server typecheck && yarn test:e2e:base && yarn test:e2e:base-sepolia"
+    "ci": "yarn workspace @pump-it-up/server typecheck && yarn test:e2e:base && yarn test:e2e:base-sepolia",
+    "intel": "yarn workspace @fleet/intelligence cli",
+    "intel:sync": "yarn workspace @fleet/intelligence cli sync",
+    "intel:recent": "yarn workspace @fleet/intelligence cli recent",
+    "intel:alerts": "yarn workspace @fleet/intelligence cli alerts",
+    "intel:watchlist": "yarn workspace @fleet/intelligence cli watchlist:list"
   }
 }

@@ -25,6 +25,8 @@ import { tradesRouter } from "./routes/trades.js";
 import { swingRouter } from "./routes/swing.js";
 import { walletsRouter } from "./routes/wallets.js";
 import { getAutonomyConfig, startAutonomyLoop } from "./services/autonomy.js";
+import { initIntelligenceEngine, startIntelligenceLoop } from "./services/intelligence.js";
+import { intelligenceRouter } from "./routes/intelligence.js";
 import { getEthBalance } from "./services/balance.js";
 import { ensureMasterWallet } from "./services/wallet.js";
 import { db } from "./db/index.js";
@@ -89,6 +91,7 @@ app.use("/positions", positionsRouter);
 app.use("/dashboard", dashboardRouter);
 app.use("/autonomy", autonomyRouter);
 app.use("/swing", swingRouter);
+app.use("/intelligence", intelligenceRouter);
 
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   const message = error instanceof Error ? error.message : "Unhandled server error";
@@ -115,6 +118,14 @@ async function start(): Promise<void> {
 
     logger.info({ dopplerConfig, network, mockMode }, "fleet server starting");
 
+    // Initialize intelligence engine (needed for zoraSignals bridge + autonomy)
+    try {
+      initIntelligenceEngine();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "intelligence init failed";
+      logger.warn({ err }, `intelligence engine init skipped: ${msg}`);
+    }
+
     await ensureMasterWallet();
     app.listen(port, () => {
       logger.info({ port }, "pump-it-up server listening");
@@ -126,6 +137,21 @@ async function start(): Promise<void> {
         } catch (error) {
           const message = error instanceof Error ? error.message : "failed to start autonomy loop";
           logger.error({ err: error }, `autonomy startup skipped: ${message}`);
+        }
+      }
+
+      // Auto-start intelligence polling if configured
+      const intelEnabled = ["1", "true", "yes", "on"].includes(
+        (process.env.INTELLIGENCE_ENABLED ?? "").trim().toLowerCase(),
+      );
+      if (intelEnabled) {
+        try {
+          const intervalSec = Math.max(10, Number(process.env.INTELLIGENCE_INTERVAL_SEC ?? "60"));
+          const status = startIntelligenceLoop({ intervalSec });
+          logger.info({ intervalSec: status.intervalSec }, "intelligence polling loop started");
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : "failed to start intelligence loop";
+          logger.error({ err: error }, `intelligence startup skipped: ${msg}`);
         }
       }
     });

@@ -4,10 +4,11 @@ import { FleetsTab } from "./components/FleetsTab";
 import { PositionsTab } from "./components/PositionsTab";
 import { ActivityTab } from "./components/ActivityTab";
 import { ControlsTab } from "./components/ControlsTab";
+import { IntelligenceTab } from "./components/IntelligenceTab";
 import { fetchHealth, fetchFleets } from "./api/client";
 import type { HealthResponse, FleetInfo } from "./types";
 
-type Tab = "dashboard" | "fleets" | "positions" | "activity" | "controls";
+type Tab = "dashboard" | "fleets" | "positions" | "activity" | "controls" | "intel";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "dashboard", label: "Dashboard" },
@@ -15,6 +16,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "positions", label: "Positions" },
   { id: "activity", label: "Activity" },
   { id: "controls", label: "Controls" },
+  { id: "intel", label: "Intel" },
 ];
 
 function ConnectionStatus({ health }: { health: HealthResponse | null | "error" }) {
@@ -113,6 +115,7 @@ export default function App() {
         {tab === "positions" && <PositionsTab />}
         {tab === "activity" && <ActivityTab />}
         {tab === "controls" && <ControlsTab fleetNames={fleetNames} onFleetsChanged={() => void refreshFleets()} />}
+        {tab === "intel" && <IntelligenceTab />}
       </main>
     </div>
   );

@@ -117,10 +117,22 @@ async function main() {
     return;
   }
 
-  if (cmd === "daemon:start") return daemonStart();
-  if (cmd === "daemon:stop") return daemonStop();
-  if (cmd === "daemon:status") return daemonStatus();
-  if (cmd === "daemon:run") return runPollingLoop();
+  if (cmd === "daemon:start") {
+    console.log("NOTE: Standalone daemon is deprecated. Use the server's /intelligence/start endpoint or set INTELLIGENCE_ENABLED=true.");
+    return daemonStart();
+  }
+  if (cmd === "daemon:stop") {
+    console.log("NOTE: Standalone daemon is deprecated. Use the server's /intelligence/stop endpoint.");
+    return daemonStop();
+  }
+  if (cmd === "daemon:status") {
+    console.log("NOTE: Standalone daemon is deprecated. Use GET /intelligence/status on the server.");
+    return daemonStatus();
+  }
+  if (cmd === "daemon:run") {
+    console.log("NOTE: Standalone daemon is deprecated. Use INTELLIGENCE_ENABLED=true with the server.");
+    return runPollingLoop();
+  }
 
   if (cmd === "recent") {
     console.table(recentCoins(Number(process.argv[3] ?? 20)));
