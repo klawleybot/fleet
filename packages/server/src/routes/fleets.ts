@@ -6,13 +6,13 @@ import {
   sweepFleet,
   getFleetStatusByName,
 } from "../services/fleet.js";
+import { db } from "../db/index.js";
 import {
   requestSupportCoinOperation,
   requestExitCoinOperation,
   approveAndExecuteOperation,
 } from "../services/operations.js";
 import { dripSwap } from "../services/trade.js";
-import { db } from "../db/index.js";
 import { isAddress, parseEther } from "viem";
 
 export const fleetsRouter = Router();
@@ -62,6 +62,17 @@ fleetsRouter.get("/:name", (req, res) => {
     return res.status(404).json({ error: "Fleet not found" });
   }
   return res.json({ fleet });
+});
+
+/** DELETE /fleets/:name — remove the cluster + wallet assignments (wallets themselves remain) */
+fleetsRouter.delete("/:name", (req, res) => {
+  const fleet = getFleetByName(req.params.name!);
+  if (!fleet) {
+    return res.status(404).json({ error: "Fleet not found" });
+  }
+
+  const deleted = db.deleteCluster(fleet.clusterId);
+  return res.json({ deleted, name: req.params.name });
 });
 
 /** GET /fleets/:name/status — fleet status with positions + P&L */

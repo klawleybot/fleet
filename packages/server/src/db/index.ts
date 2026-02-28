@@ -233,9 +233,22 @@ let _sqlite: Database.Database | null = null;
  *
  * The default is anchored to the package directory via import.meta.url so the
  * resolved path is stable regardless of which directory the process starts in.
+ *
+ * SAFETY GUARDRAIL: if Vitest is the runner (process.env.VITEST is set) but
+ * SQLITE_PATH was not explicitly configured, we throw immediately rather than
+ * silently opening the production database.  Configure env.SQLITE_PATH in
+ * your vitest config (see vitest.config.ts / vitest.e2e.config.ts).
  */
 function resolveDbPath(): string {
   const envPath = process.env.SQLITE_PATH?.trim();
+
+  if (process.env.VITEST && !envPath) {
+    throw new Error(
+      "DB safety violation: Vitest is active but SQLITE_PATH is not set. " +
+        "Add env.SQLITE_PATH to your vitest config so tests never touch the production database.",
+    );
+  }
+
   if (envPath) {
     // Absolute paths pass through; relative paths resolve from cwd (explicit choice by caller)
     return path.resolve(envPath);
@@ -784,6 +797,22 @@ export const db = {
 
   deleteSwingConfig(id: number): boolean {
     const result = getSqlite().prepare("DELETE FROM swing_configs WHERE id = ?").run(id);
+    return result.changes > 0;
+  },
+
+  deleteWallet(id: number): boolean {
+    const sqlite = getSqlite();
+    // Remove from any cluster assignments first, then delete the record
+    sqlite.prepare("DELETE FROM cluster_wallets WHERE wallet_id = ?").run(id);
+    const result = sqlite.prepare("DELETE FROM wallets WHERE id = ?").run(id);
+    return result.changes > 0;
+  },
+
+  deleteCluster(id: number): boolean {
+    const sqlite = getSqlite();
+    // Remove wallet assignments, then the cluster itself
+    sqlite.prepare("DELETE FROM cluster_wallets WHERE cluster_id = ?").run(id);
+    const result = sqlite.prepare("DELETE FROM clusters WHERE id = ?").run(id);
     return result.changes > 0;
   },
 };

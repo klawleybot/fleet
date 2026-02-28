@@ -6,6 +6,7 @@
   "scripts": {
     "test": "tsx --test src/**/*.test.ts",
     "build": "tsc",
+    "typecheck": "tsc --noEmit",
     "sync": "tsx src/cli.ts sync",
     "poll-once": "tsx src/cli.ts poll-once",
     "daemon:start": "tsx src/cli.ts daemon:start",

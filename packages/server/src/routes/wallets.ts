@@ -3,9 +3,11 @@ import { isAddress } from "viem";
 import { createFleetWallets, ensureMasterWallet, getWalletEthBalance, listWallets } from "../services/wallet.js";
 import { bootstrapFleetFunding, getWalletBootstrapWei } from "../services/funding.js";
 import { getErc20Balance } from "../services/balance.js";
+import { db } from "../db/index.js";
 
 interface CreateWalletsBody {
   count?: number;
+  name?: string;
   bootstrapAmountWei?: string;
 }
 
@@ -38,7 +40,8 @@ walletsRouter.post("/", async (req, res) => {
   }
 
   try {
-    const created = await createFleetWallets(count);
+    const fleetName = typeof body.name === "string" && body.name.trim() ? body.name.trim() : `wallet-${Date.now()}`;
+    const created = await createFleetWallets(count, fleetName);
     if (bootstrapWei > 0n && created.length > 0) {
       try {
         const bootstrapRecords = await bootstrapFleetFunding({
@@ -71,6 +74,24 @@ walletsRouter.get("/", async (_req, res) => {
     const message = error instanceof Error ? error.message : "Unexpected error";
     return res.status(500).json({ error: message });
   }
+});
+
+walletsRouter.delete("/:id", (req, res) => {
+  const id = Number.parseInt(req.params.id, 10);
+  if (Number.isNaN(id) || id < 1) {
+    return res.status(400).json({ error: "wallet id must be a positive integer" });
+  }
+
+  const wallet = db.getWalletById(id);
+  if (!wallet) {
+    return res.status(404).json({ error: "Wallet not found" });
+  }
+  if (wallet.isMaster) {
+    return res.status(400).json({ error: "Cannot delete master wallet" });
+  }
+
+  const deleted = db.deleteWallet(id);
+  return res.json({ deleted });
 });
 
 walletsRouter.get("/:id/balance", async (req, res) => {
