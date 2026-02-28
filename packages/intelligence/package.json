@@ -1,0 +1,50 @@
+{
+  "name": "@fleet/intelligence",
+  "version": "1.0.0",
+  "description": "Zora coin intelligence engine",
+  "main": "index.js",
+  "scripts": {
+    "test": "tsx --test src/**/*.test.ts",
+    "build": "tsc",
+    "sync": "tsx src/cli.ts sync",
+    "poll-once": "tsx src/cli.ts poll-once",
+    "daemon:start": "tsx src/cli.ts daemon:start",
+    "daemon:stop": "tsx src/cli.ts daemon:stop",
+    "daemon:status": "tsx src/cli.ts daemon:status",
+    "daemon:run": "tsx src/cli.ts daemon:run",
+    "recent": "tsx src/cli.ts recent 20",
+    "top-volume": "tsx src/cli.ts top-volume 20",
+    "analytics": "tsx src/cli.ts analytics 20",
+    "alerts": "tsx src/cli.ts alerts 20",
+    "first-coin": "tsx src/cli.ts first-coin",
+    "contracts": "tsx src/cli.ts contracts",
+    "start": "tsx src/cli.ts help",
+    "dispatch-alerts": "tsx src/cli.ts dispatch-alerts 12",
+    "dispatch-alerts-rich": "tsx src/cli.ts dispatch-alerts-rich 12",
+    "watchlist:list": "tsx src/cli.ts watchlist:list default",
+    "watchlist:moves": "tsx src/cli.ts watchlist:moves default 25",
+    "chart": "tsx src/chart.ts",
+    "dashboard": "tsx src/coin-dashboard.ts",
+    "price-volume": "tsx src/price-volume.ts",
+    "cluster-pie": "tsx src/cluster-pie.ts",
+    "cluster-flow": "tsx src/cluster-flow.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@zoralabs/coins-sdk": "^0.4.3",
+    "@zoralabs/protocol-deployments": "^0.7.2",
+    "better-sqlite3": "^12.6.2",
+    "dotenv": "^17.3.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "viem": "^2.45.3",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.2.3"
+  }
+}

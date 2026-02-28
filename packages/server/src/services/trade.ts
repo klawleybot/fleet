@@ -197,12 +197,46 @@ export async function strategySwap(input: {
   }
 
   const isBuy = isEthLike(input.fromToken);
+  const isSell = !isBuy;
+  const isMockMode = process.env.CDP_MOCK_MODE === "1";
+
+  // ---- Pre-flight holdings check for sells ----
+  // Only include wallets that actually hold tokens. Skips dust wallets
+  // and wallets already fully sold, avoiding wasted UserOp attempts.
+  const MIN_SELL_HOLDINGS = 100n; // skip wallets with fewer tokens than this
+  let eligibleWalletIds = input.walletIds;
+  if (isSell && !isMockMode) {
+    const coinAddress = input.fromToken.toLowerCase();
+    const withHoldings: Array<{ walletId: number; holdings: bigint }> = [];
+
+    for (const wid of input.walletIds) {
+      const positions = db.listPositionsByWallet(wid);
+      const pos = positions.find((p) => p.coinAddress.toLowerCase() === coinAddress);
+      const holdings = pos ? BigInt(pos.holdingsRaw) : 0n;
+      if (holdings >= MIN_SELL_HOLDINGS) {
+        withHoldings.push({ walletId: wid, holdings });
+      }
+    }
+
+    if (withHoldings.length === 0) {
+      throw new Error(
+        `No wallets hold sufficient tokens to sell. ` +
+        `${input.walletIds.length} wallets checked, 0 above ${MIN_SELL_HOLDINGS} threshold`
+      );
+    }
+
+    eligibleWalletIds = withHoldings.map((w) => w.walletId);
+
+    // Cap total sell amount to what wallets actually hold
+    const totalHoldings = withHoldings.reduce((sum, w) => sum + w.holdings, 0n);
+    const cappedAmount = totalHoldings < input.totalAmountInWei ? totalHoldings : input.totalAmountInWei;
+
+    input = { ...input, totalAmountInWei: cappedAmount, walletIds: eligibleWalletIds };
+  }
 
   // ---- Pre-flight balance check for buys ----
-  // Only trade with wallets that have enough ETH.
+  // Only trade with wallets that have enough ETH for their share.
   // Skip in mock mode (tests) since mock wallets have no real balance.
-  const isMockMode = process.env.CDP_MOCK_MODE === "1";
-  let eligibleWalletIds = input.walletIds;
   if (isBuy && !isMockMode) {
     const walletRows = input.walletIds.map((id) => {
       const w = db.getWalletById(id);
@@ -211,29 +245,31 @@ export async function strategySwap(input: {
     });
 
     const budgets = await getWalletBudgets(walletRows);
-    const perWalletMin = input.totalAmountInWei / BigInt(input.walletIds.length);
-    // A wallet is eligible if it has at least the per-wallet share (or MIN_BUY_BALANCE_WEI, whichever is larger)
-    const threshold = perWalletMin > MIN_BUY_BALANCE_WEI ? perWalletMin : MIN_BUY_BALANCE_WEI;
+    const perWalletTarget = input.totalAmountInWei / BigInt(input.walletIds.length);
 
-    eligibleWalletIds = budgets.wallets
-      .filter((w) => w.balance >= threshold)
-      .map((w) => w.walletId);
+    // Wallet must have at least its per-wallet share to participate.
+    // This prevents submitting UserOps that will revert due to insufficient balance.
+    const eligible = budgets.wallets.filter((w) => w.balance >= perWalletTarget);
 
-    if (eligibleWalletIds.length === 0) {
+    if (eligible.length === 0) {
+      // Calculate the actual max any wallet could trade
+      const maxBalance = budgets.wallets.reduce((max, w) => w.balance > max ? w.balance : max, 0n);
       throw new Error(
         `No wallets have sufficient ETH for buy. ` +
-        `${budgets.fundedCount}/${budgets.wallets.length} funded, ` +
-        `totalBudget=${budgets.totalBudget}, ` +
-        `needed=${input.totalAmountInWei}`
+        `Need ${perWalletTarget} wei/wallet, max balance is ${maxBalance} wei. ` +
+        `${budgets.fundedCount}/${budgets.wallets.length} above dust, ` +
+        `0/${budgets.wallets.length} above trade threshold`
       );
     }
 
-    // Cap totalAmount to actual available budget
-    const cappedAmount = budgets.totalBudget < input.totalAmountInWei
-      ? budgets.totalBudget
+    eligibleWalletIds = eligible.map((w) => w.walletId);
+
+    // Cap total to what eligible wallets can actually spend
+    const eligibleBudget = eligible.reduce((sum, w) => sum + w.balance, 0n);
+    const cappedAmount = eligibleBudget < input.totalAmountInWei
+      ? eligibleBudget
       : input.totalAmountInWei;
 
-    // Re-assign amount to only spend what's available across eligible wallets
     input = { ...input, totalAmountInWei: cappedAmount, walletIds: eligibleWalletIds };
   }
 

@@ -116,15 +116,25 @@ function createZoraFixtureDb(filePath: string, chainId: number): void {
       enabled INTEGER NOT NULL DEFAULT 1,
       PRIMARY KEY(list_name, coin_address)
     );
+
+    CREATE TABLE IF NOT EXISTS coin_swaps (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      coin_address TEXT NOT NULL,
+      sender_address TEXT,
+      block_timestamp TEXT,
+      amount_usdc REAL DEFAULT 0,
+      is_buy INTEGER DEFAULT 1
+    );
   `);
 
   db.prepare(
     `INSERT OR REPLACE INTO coins (address, symbol, name, chain_id, volume_24h) VALUES (?, ?, ?, ?, ?)`,
   ).run(WATCHLIST_COIN, "USRX", "USRX", chainId, 1_000_000);
 
+  // Seed as a dip signal: low acceleration, negative net flow (people selling, price dropping)
   db.prepare(
-    `INSERT OR REPLACE INTO coin_analytics (coin_address, momentum_score, swap_count_24h, net_flow_usdc_24h) VALUES (?, ?, ?, ?)`,
-  ).run(WATCHLIST_COIN, 5000, 4000, 2000);
+    `INSERT OR REPLACE INTO coin_analytics (coin_address, momentum_score, swap_count_24h, net_flow_usdc_24h, momentum_acceleration_1h, net_flow_usdc_1h, swap_count_1h) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(WATCHLIST_COIN, 5000, 4000, 2000, 0.3, -500, 15);
 
   db.prepare(`INSERT OR REPLACE INTO coin_watchlist (list_name, coin_address, enabled) VALUES (?, ?, 1)`).run(
     WATCHLIST_NAME,
@@ -201,7 +211,7 @@ describe("autonomy soak", () => {
       AUTONOMY_REQUESTED_BY: "autonomy-worker",
       AUTONOMY_CLUSTER_IDS: "1",
       AUTO_APPROVE_ENABLED: "true",
-      AUTO_APPROVE_REQUESTERS: "autonomy-worker",
+      AUTO_APPROVE_REQUESTERS: "autonomy-worker,autonomy-worker:dip,autonomy-worker:pump",
       AUTO_APPROVE_OPERATION_TYPES: "SUPPORT_COIN",
       AUTO_APPROVE_MAX_TRADE_WEI: "1000000000000000",
     });
@@ -229,7 +239,8 @@ describe("autonomy soak", () => {
     for (let i = 0; i < ticks; i += 1) {
       const tick = await api("POST", "/autonomy/tick", {});
       expect(tick.status).toBe(200);
-      const t = tick.json.tick as { errors: string[]; executedOperationIds: number[] };
+      const t = tick.json.tick as { errors: string[]; executedOperationIds: number[]; createdOperationIds: number[]; skipped: Array<{ reason: string }> };
+      if (i === 0) console.log("[soak] tick 0:", JSON.stringify({ created: t.createdOperationIds, executed: t.executedOperationIds, skipped: t.skipped, errors: t.errors }));
       expect(Array.isArray(t.errors)).toBe(true);
       expect(t.errors.length).toBe(0);
       executedTotal += t.executedOperationIds.length;
@@ -244,7 +255,7 @@ describe("autonomy soak", () => {
     const pending = rows.filter((r) => r.status === "pending" || r.status === "approved" || r.status === "executing");
     expect(pending.length).toBe(0);
 
-    const autonomySupportOps = rows.filter((r) => r.requestedBy === "autonomy-worker" && r.type === "SUPPORT_COIN");
+    const autonomySupportOps = rows.filter((r) => r.requestedBy?.startsWith("autonomy-worker") && r.type === "SUPPORT_COIN");
     expect(autonomySupportOps.length).toBeGreaterThan(0);
     expect(autonomySupportOps.every((r) => r.status === "complete")).toBe(true);
   });

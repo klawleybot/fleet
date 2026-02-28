@@ -1,6 +1,6 @@
 import { db } from "../db/index.js";
 import { evaluateAutoApproval, getAutoApprovalPolicy } from "./approval.js";
-import { approveAndExecuteOperation, requestSupportFromZoraSignal, requestExitCoinOperation, requestSupportCoinOperation } from "./operations.js";
+import { approveAndExecuteOperation, requestExitCoinOperation, requestSupportCoinOperation } from "./operations.js";
 import { getWalletBudgets } from "./balance.js";
 import type { OperationRecord, StrategyMode } from "../types.js";
 import type { ZoraSignalMode } from "./zoraSignals.js";
@@ -23,6 +23,9 @@ interface AutonomyConfig {
   requestedBy: string;
   createRequests: boolean;
   autoApprovePending: boolean;
+  pumpThreshold: number;
+  dipThreshold: number;
+  ownDiscountEnabled: boolean;
 }
 
 interface TickResult {
@@ -140,56 +143,6 @@ export async function runAutonomyTick(): Promise<TickResult> {
 
     if (config.clusterIds.length === 0) {
       result.skipped.push({ reason: "AUTONOMY_CLUSTER_IDS is empty" });
-    } else if (config.createRequests) {
-      for (const clusterId of config.clusterIds) {
-        try {
-          if (db.hasOpenOperationForCluster(clusterId)) {
-            result.skipped.push({ reason: `cluster ${clusterId} has open operation` });
-            continue;
-          }
-
-          // Pre-check cooldown before creating an op that would just get stuck
-          const lastOpAge = db.getLatestClusterOperationAgeSec(clusterId);
-          const cooldownSec = parseInt(process.env.CLUSTER_COOLDOWN_SEC ?? "45", 10);
-          if (lastOpAge !== null && lastOpAge < cooldownSec) {
-            result.skipped.push({ reason: `cluster ${clusterId} cooldown (${lastOpAge}s/${cooldownSec}s)` });
-            continue;
-          }
-
-          // Pre-check cluster buy budget — skip if wallets have no ETH
-          // (skipped in mock mode since test wallets have no real balance)
-          if (process.env.CDP_MOCK_MODE !== "1") {
-            const clusterWalletRows = db.listClusterWalletDetails(clusterId);
-            const budgets = await getWalletBudgets(
-              clusterWalletRows.map((w) => ({ id: w.id, address: w.address as `0x${string}` })),
-            );
-            const requestedWei = BigInt(config.totalAmountWei);
-            if (budgets.totalBudget < requestedWei / 2n) {
-              const budgetEth = (Number(budgets.totalBudget) / 1e18).toFixed(6);
-              const requestedEth = (Number(requestedWei) / 1e18).toFixed(6);
-              result.skipped.push({
-                reason: `cluster ${clusterId} insufficient buy budget: ${budgets.fundedCount}/${budgets.wallets.length} wallets funded, ${budgetEth}/${requestedEth} ETH`,
-              });
-              continue;
-            }
-          }
-
-          const operation = requestSupportFromZoraSignal({
-            clusterId,
-            mode: config.signalMode,
-            ...(config.watchlistName ? { listName: config.watchlistName } : {}),
-            ...(config.minMomentum !== null ? { minMomentum: config.minMomentum } : {}),
-            totalAmountWei: config.totalAmountWei,
-            slippageBps: config.slippageBps,
-            ...(config.strategyMode ? { strategyMode: config.strategyMode } : {}),
-            requestedBy: config.requestedBy,
-          });
-          result.createdOperationIds.push(operation.id);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "unknown cluster creation error";
-          result.errors.push(`cluster ${clusterId}: ${message}`);
-        }
-      }
     }
 
     // --- P4: Momentum intelligence — pump/dip detection ---
@@ -230,10 +183,27 @@ export async function runAutonomyTick(): Promise<TickResult> {
             }
 
             try {
-              // Find total holdings to sell
+              // Find total holdings to sell — skip if value too low to justify gas
               const coinPositions = positions.filter((p) => p.coinAddress === signal.coinAddress && BigInt(p.holdingsRaw) > 0n);
               const totalHoldings = coinPositions.reduce((sum, p) => sum + BigInt(p.holdingsRaw), 0n);
               if (totalHoldings <= 0n) continue;
+
+              // Estimate value: use quoter to check if holdings are worth selling
+              const minSellValueWei = BigInt(process.env.MIN_SELL_VALUE_WEI ?? "500000000000000"); // 0.0005 ETH default
+              try {
+                const { quoteCoinToEth } = await import("./quoter.js");
+                const estValue = await quoteCoinToEth({ coinAddress: signal.coinAddress as `0x${string}`, amount: totalHoldings });
+                if (estValue < minSellValueWei) {
+                  result.skipped.push({
+                    reason: `cluster ${clusterId} ${signal.coinAddress.slice(0,10)} holdings worth ~${(Number(estValue) / 1e18).toFixed(6)} ETH — below min sell value ${(Number(minSellValueWei) / 1e18).toFixed(4)} ETH`,
+                  });
+                  continue;
+                }
+              } catch {
+                // If quoting fails, skip the sell (can't confirm value)
+                result.skipped.push({ reason: `cluster ${clusterId} ${signal.coinAddress.slice(0,10)} quote failed — skipping sell` });
+                continue;
+              }
 
               const operation = requestExitCoinOperation({
                 clusterId,
@@ -251,7 +221,9 @@ export async function runAutonomyTick(): Promise<TickResult> {
           }
         }
 
-        // Dip detection: check for buy opportunities
+        // Dip detection: buy opportunities on coins showing genuine dips
+        // A dip = acceleration ≤ threshold AND negative net flow (people selling, price dropping).
+        // We buy the dip expecting a reversal. This is the ONLY buy path.
         const previouslyTraded = [...new Set(positions.map((p) => p.coinAddress))];
         const dipSignals = detectDipSignals({
           previouslyTradedAddresses: previouslyTraded,
@@ -279,8 +251,10 @@ export async function runAutonomyTick(): Promise<TickResult> {
             const dipBudgets = await getWalletBudgets(
               clusterWallets.map((w) => ({ id: w.id, address: w.address as `0x${string}` })),
             );
-            if (dipBudgets.totalBudget < BigInt(config.totalAmountWei) / 2n) {
-              result.skipped.push({ reason: `cluster ${clusterId} no budget for dip buy (${dipBudgets.fundedCount}/${dipBudgets.wallets.length} funded)` });
+            const dipPerWallet = BigInt(config.totalAmountWei) / BigInt(clusterWallets.length || 1);
+            const dipReady = dipBudgets.wallets.filter((w) => w.balance >= dipPerWallet).length;
+            if (dipReady === 0) {
+              result.skipped.push({ reason: `cluster ${clusterId} no wallets can cover dip buy (need ${(Number(dipPerWallet) / 1e18).toFixed(6)} ETH/wallet)` });
               break;
             }
           }
