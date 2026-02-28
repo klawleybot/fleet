@@ -11,6 +11,7 @@ let engine: IntelligenceEngine | null = null;
 export function initIntelligenceEngine(config?: {
   zoraApiKey?: string;
   zoraChainId?: number;
+  dbPath?: string;
 }): IntelligenceEngine {
   if (engine) return engine;
 
@@ -20,6 +21,7 @@ export function initIntelligenceEngine(config?: {
   engine = new IntelligenceEngine({
     ...(zoraApiKey ? { zoraApiKey } : {}),
     ...(zoraChainId ? { zoraChainId } : {}),
+    ...(config?.dbPath ? { dbPath: config.dbPath } : {}),
   });
 
   logger.info({ dbPath: engine.config.dbPath }, "intelligence engine initialized");
@@ -29,6 +31,12 @@ export function initIntelligenceEngine(config?: {
 export function getIntelligenceEngine(): IntelligenceEngine {
   if (!engine) throw new Error("Intelligence engine not initialized — call initIntelligenceEngine() first");
   return engine;
+}
+
+/** @internal Test-only: reset the singleton so it can be re-initialized. */
+export function _resetEngine(): void {
+  if (engine) { try { engine.close(); } catch {} }
+  engine = null;
 }
 
 // ============================================================

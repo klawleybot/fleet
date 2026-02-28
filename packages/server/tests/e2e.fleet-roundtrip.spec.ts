@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import Database from "better-sqlite3";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { IntelligenceEngine } from "@fleet/intelligence";
 
 const WATCHLIST_NAME = "roundtrip-test";
 const WATCHLIST_COIN = "0x6bd561fe098fa05d5412e2ba33553042a83fcc75" as const;
@@ -88,29 +89,30 @@ function spawnProcess(cmd: string, args: string[], env: NodeJS.ProcessEnv): Chil
 }
 
 function createFixtureDb(filePath: string, chainId: number): void {
-  const db = new Database(filePath);
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS coins (
-      address TEXT PRIMARY KEY, symbol TEXT, name TEXT, chain_id INTEGER, volume_24h REAL
-    );
-    CREATE TABLE IF NOT EXISTS coin_analytics (
-      coin_address TEXT PRIMARY KEY, momentum_score REAL, swap_count_24h INTEGER, net_flow_usdc_24h REAL
-    );
-    CREATE TABLE IF NOT EXISTS coin_watchlist (
-      list_name TEXT NOT NULL, coin_address TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
-      PRIMARY KEY(list_name, coin_address)
-    );
-  `);
-  db.prepare("INSERT OR REPLACE INTO coins VALUES (?, ?, ?, ?, ?)").run(
-    WATCHLIST_COIN, "FLEET2", "Fleet2Coin", chainId, 500_000,
-  );
-  db.prepare("INSERT OR REPLACE INTO coin_analytics VALUES (?, ?, ?, ?)").run(
-    WATCHLIST_COIN, 8000, 6000, 3000,
-  );
-  db.prepare("INSERT OR REPLACE INTO coin_watchlist VALUES (?, ?, 1)").run(
-    WATCHLIST_NAME, WATCHLIST_COIN,
-  );
-  db.close();
+  
+  const engine = new IntelligenceEngine({ dbPath: filePath });
+  const db = engine.db;
+
+  db.prepare(
+    "INSERT OR REPLACE INTO coins (address, symbol, name, chain_id, volume_24h, raw_json, indexed_at) VALUES (?, ?, ?, ?, ?, '{}', datetime('now'))",
+  ).run(WATCHLIST_COIN, "FLEET2", "Fleet2Coin", chainId, 500_000);
+
+  db.prepare(
+    `INSERT OR REPLACE INTO coin_analytics (
+      coin_address, momentum_score, swap_count_24h, net_flow_usdc_24h,
+      momentum_acceleration_1h, net_flow_usdc_1h, swap_count_1h,
+      unique_traders_1h, buy_count_1h, sell_count_1h, buy_volume_usdc_1h, sell_volume_usdc_1h,
+      swap_count_prev_1h, momentum_score_1h,
+      unique_traders_24h, buy_count_24h, sell_count_24h, buy_volume_usdc_24h, sell_volume_usdc_24h,
+      updated_at
+    ) VALUES (?, ?, ?, ?, 1.5, 300, 50, 10, 30, 20, 500, 400, 30, 100, 40, 3000, 2000, 8000, 5000, datetime('now'))`,
+  ).run(WATCHLIST_COIN, 8000, 6000, 3000);
+
+  db.prepare(
+    "INSERT OR REPLACE INTO coin_watchlist (list_name, coin_address, enabled, created_at, updated_at) VALUES (?, ?, 1, datetime('now'), datetime('now'))",
+  ).run(WATCHLIST_NAME, WATCHLIST_COIN);
+
+  engine.close();
 }
 
 async function api(method: string, endpoint: string, body?: unknown) {

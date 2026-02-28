@@ -9,6 +9,7 @@ const testDbPath = path.join(os.tmpdir(), `fleet-test-${process.pid}.db`);
 export default defineConfig({
   test: {
     include: ["tests/**/*.spec.ts"],
+    setupFiles: ["tests/setup.ts"],
     // Run test files sequentially to avoid port contention when
     // multiple e2e tests spawn anvil + server processes simultaneously.
     fileParallelism: false,

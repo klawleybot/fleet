@@ -13,7 +13,7 @@
     "test:e2e:base-live": "E2E_BASE_LIVE=1 APP_NETWORK=base-sepolia SIGNER_BACKEND=local CDP_MOCK_MODE=false BUNDLER_PRIMARY_NAME=pimlico vitest run --config vitest.e2e.config.ts tests/e2e.local-funding.spec.ts"
   },
   "dependencies": {
-    "@fleet/intelligence": "workspace:*",
+    "@fleet/intelligence": "*",
     "@coinbase/cdp-sdk": "^1.29.0",
     "better-sqlite3": "^11.7.0",
     "cors": "^2.8.5",
