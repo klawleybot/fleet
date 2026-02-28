@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "workspaces": [
     "packages/server",
-    "packages/web"
+    "packages/web",
+    "packages/intelligence"
   ],
   "scripts": {
     "dev": "yarn workspace @pump-it-up/server dev",
