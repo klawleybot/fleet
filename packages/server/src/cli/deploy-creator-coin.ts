@@ -18,7 +18,6 @@
  */
 
 import { parseArgs } from "node:util";
-import { readFileSync } from "node:fs";
 import type { Address, Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { createPublicClient, http } from "viem";
@@ -31,8 +30,7 @@ const { values } = parseArgs({
     name: { type: "string" },
     symbol: { type: "string" },
     description: { type: "string", default: "" },
-    "image-uri": { type: "string" },
-    "image-file": { type: "string" },
+    "metadata-uri": { type: "string" },
     "dry-run": { type: "boolean", default: false },
     "chain-id": { type: "string", default: "8453" },
   },
@@ -55,18 +53,18 @@ async function main() {
   }
 
   const chainId = Number(values["chain-id"]);
-  const imageURI = values["image-uri"] || "";
-  const imageFile = values["image-file"];
+  const metadataURI = values["metadata-uri"] || "";
 
   console.log("🦞 Creator Coin Deployment");
   console.log("─".repeat(40));
   console.log(`  Name:         ${values.name}`);
   console.log(`  Symbol:       $${values.symbol}`);
   console.log(`  Description:  ${values.description || "(none)"}`);
-  console.log(`  Image:        ${imageFile || imageURI || "(none)"}`);
+  console.log(`  Metadata URI: ${metadataURI || "(none — will use placeholder for dry run)"}`);
   console.log(`  Chain:        ${chainId === 8453 ? "Base" : `Chain ${chainId}`}`);
   console.log(`  EOA Signer:   ${account.address}`);
   console.log(`  Smart Wallet: ${SMART_WALLET}`);
+  console.log(`  Gas:          Pimlico sponsored (no ETH needed)`);
   console.log(`  Dry Run:      ${values["dry-run"]}`);
   console.log("─".repeat(40));
 
@@ -91,49 +89,34 @@ async function main() {
   }
   console.log("✅ EOA confirmed as smart wallet owner");
 
-  // Read image file if provided
-  let imageBuffer: Buffer | undefined;
-  if (imageFile) {
-    imageBuffer = readFileSync(imageFile);
-    console.log(`📷 Loaded image: ${imageFile} (${imageBuffer.length} bytes)`);
-  }
-
   if (values["dry-run"]) {
-    // Just test the API call
     console.log("\n🔍 Dry run — fetching predicted address...");
 
-    const res = await fetch("https://api-sdk.zora.engineering/create/content", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        currency: "ZORA",
-        chainId,
-        metadata: { type: "RAW_URI", uri: imageURI || "ipfs://placeholder" },
-        creator: SMART_WALLET,
-        name: values.name,
-        symbol: values.symbol,
-      }),
+    const { getCreatorCoinCalldata } = await import("../services/creatorCoin.js");
+    const data = await getCreatorCoinCalldata({
+      creator: SMART_WALLET,
+      name: values.name,
+      symbol: values.symbol,
+      metadataURI: metadataURI || "ipfs://placeholder",
+      chainId,
     });
 
-    if (!res.ok) {
-      console.error(`❌ API error: ${res.status} ${await res.text()}`);
-      process.exit(1);
-    }
-
-    const data = await res.json() as { predictedCoinAddress: string; usedSmartWalletRouting: boolean };
     console.log(`\n✅ Dry run successful!`);
     console.log(`  Predicted coin address: ${data.predictedCoinAddress}`);
     console.log(`  Smart wallet routing:   ${data.usedSmartWalletRouting}`);
+    console.log(`  # of calls:             ${data.calls.length}`);
+    console.log(`  Target:                 ${data.calls[0]?.to}`);
+    console.log(`  Value:                  ${data.calls[0]?.value} wei`);
     return;
   }
 
   // Real deployment
-  const { deployCreatorCoin, uploadCreatorCoinMetadata } = await import("../services/creatorCoin.js");
-
-  if (!imageURI && !imageFile) {
-    console.error("❌ Either --image-uri or --image-file is required for deployment");
+  if (!metadataURI) {
+    console.error("❌ --metadata-uri is required for deployment (ipfs:// or https:// to metadata JSON)");
     process.exit(1);
   }
+
+  const { deployCreatorCoin } = await import("../services/creatorCoin.js");
 
   const result = await deployCreatorCoin(
     {
@@ -142,7 +125,7 @@ async function main() {
         name: values.name,
         symbol: values.symbol,
         description: values.description || "",
-        imageURI: imageURI || "ipfs://placeholder",
+        metadataURI,
       },
       chainId,
     },
@@ -154,7 +137,6 @@ async function main() {
   console.log(`  Coin Address:      ${result.coinAddress}`);
   console.log(`  Predicted Address: ${result.predictedAddress}`);
   console.log(`  TX Hash:           ${result.txHash}`);
-  console.log(`  Pool Address:      ${result.poolAddress || "(v4 pool)"}`);
   console.log(`  View on Zora:      https://zora.co/coin/base:${result.coinAddress.toLowerCase()}`);
 }
 
