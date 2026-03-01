@@ -114,10 +114,9 @@ async function deployContentCoin(params: ContentCoinParams): Promise<{
   // 2. Get content coin pool config (backed by creator coin)
   console.log("📊 Fetching content coin pool config (backed by $openklaw)...");
   const poolConfigResult = await getContentCoinPoolConfig({
-    query: {
-      creatorCoin: CREATOR_COIN,
-      chainId: 8453,
-    },
+    creatorCoin: CREATOR_COIN,
+    chainId: 8453,
+    currencyType: "CREATOR_COIN",
   });
 
   const encodedConfig = poolConfigResult.data?.contentCoinPoolConfig?.encodedConfig;
