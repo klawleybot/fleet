@@ -332,7 +332,11 @@ export function generateMarketContext(dbPath?: string): MarketContext {
 /**
  * Format MarketContext into a prompt-ready text block for Klawley.
  */
-export function formatCommentaryPrompt(ctx: MarketContext): string {
+export async function formatCommentaryPrompt(ctx: MarketContext): Promise<string> {
+  // Resolve degen profile addresses to Zora handles
+  const degenAddresses = ctx.degenProfiles.map(d => d.address);
+  const handleMap = degenAddresses.length > 0 ? await resolveHandles(degenAddresses) : new Map<string, string>();
+
   const lines: string[] = [];
 
   lines.push(`# 🦞 ZORA TRENCHES REPORT — ${new Date(ctx.generatedAt).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", year: "numeric" })}`);
@@ -391,8 +395,9 @@ export function formatCommentaryPrompt(ctx: MarketContext): string {
   if (ctx.degenProfiles.length > 0) {
     lines.push("## 🎰 TOP DEGENS (the usual suspects)");
     for (const d of ctx.degenProfiles.slice(0, 5)) {
-      const short = d.address.slice(0, 8) + "..." + d.address.slice(-4);
-      lines.push(`- **${short}**: ${d.swaps} swaps across ${d.coins} coins (${d.buys}B/${d.sells}S) — style: ${d.style}`);
+      const handle = handleMap.get(d.address.toLowerCase());
+      const label = handle ? `@${handle} (${d.address.slice(0, 6)}…)` : `${d.address.slice(0, 8)}...${d.address.slice(-4)}`;
+      lines.push(`- **${label}**: ${d.swaps} swaps across ${d.coins} coins (${d.buys}B/${d.sells}S) — style: ${d.style}`);
     }
     lines.push("");
   }
@@ -534,9 +539,11 @@ export async function generateBatchCommentary(alertContexts: unknown[]): Promise
 
 // CLI entry point
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const ctx = generateMarketContext();
-  const prompt = formatCommentaryPrompt(ctx);
-  console.log(prompt);
-  console.log("\n---\n");
-  console.log(JSON.stringify(ctx, null, 2));
+  (async () => {
+    const ctx = generateMarketContext();
+    const prompt = await formatCommentaryPrompt(ctx);
+    console.log(prompt);
+    console.log("\n---\n");
+    console.log(JSON.stringify(ctx, null, 2));
+  })();
 }
