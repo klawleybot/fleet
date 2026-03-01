@@ -6,6 +6,7 @@ import { db, getUnsentAlerts, markAlertsSent, upsertCoin } from "./db.js";
 import { dedupeAlertRows } from "./alerts-dedupe.js";
 import { selectDiverseAlerts } from "./alerts-diversity.js";
 import { generateBatchCommentary } from "./commentary.js";
+import { uploadToArweave } from "./arweave.js";
 
 const getCoinSwaps = (zoraSdk as any).getCoinSwaps as (args: any) => Promise<any>;
 const getCoinsNew = (zoraSdk as any).getCoinsNew as (args: any) => Promise<any>;
@@ -770,7 +771,7 @@ function buildDispatchPayload(
   `);
 
   const chartCoinMap = new Map<string, { coinAddress: string; symbol: string | null; name: string | null }>();
-  const alertContexts: Array<{ symbol: string; name: string; marketCap: number; trend: string; severity: string; type: string; message: string }> = [];
+  const alertContexts: Array<{ symbol: string; name: string; coinAddress: string; marketCap: number; trend: string; severity: string; type: string; message: string }> = [];
 
   const lines = rows.map((r) => {
     const sev = r.severity.toUpperCase();
@@ -806,6 +807,7 @@ function buildDispatchPayload(
       alertContexts.push({
         symbol: symbol || "unknown",
         name: name || "unknown",
+        coinAddress: r.entity_id,
         marketCap: marketCapUsd,
         trend: trend.word,
         severity: sev,
@@ -827,7 +829,7 @@ function buildDispatchPayload(
 
 export type DispatchAlertsRich = {
   message: string;
-  media: Array<{ coinAddress: string; symbol: string | null; name: string | null; filePath: string }>;
+  media: Array<{ coinAddress: string; symbol: string | null; name: string | null; filePath: string; arweaveUrl?: string }>;
 };
 
 function applyDispatchDiversity(rows: Array<{ id: number; type: string; entity_id: string | null; severity: string; message: string; created_at: string }>, limit: number) {
@@ -936,11 +938,20 @@ export async function dispatchPendingAlertsRich(limit = 12): Promise<DispatchAle
         bucketMinutes: 15,
         outFile: filePath,
       });
+      // Upload chart to Arweave for permanent on-chain hosting
+      let arweaveUrl: string | undefined;
+      try {
+        arweaveUrl = await uploadToArweave(filePath);
+      } catch (err) {
+        console.error(`Arweave upload failed for ${coin.coinAddress}:`, err);
+      }
+
       media.push({
         coinAddress: coin.coinAddress,
         symbol: coin.symbol,
         name: coin.name,
         filePath,
+        arweaveUrl,
       });
     } catch (err) {
       console.error(`alert chart generation failed for ${coin.coinAddress}:`, err);

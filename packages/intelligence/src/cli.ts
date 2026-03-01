@@ -94,7 +94,9 @@ async function main() {
   const cmd = process.argv[2];
 
   if (!cmd || cmd === "help") {
-    console.log(`zora-intelligence commands:\n\n  sync [count]                       Sync recent + top-volume coins\n  poll-once                          Ingest swaps + analytics + alerts once\n  daemon:start                       Start background polling daemon (nohup + pid file)\n  daemon:stop                        Stop daemon\n  daemon:status                      Show daemon status + log tail\n  daemon:run                         Run polling loop in foreground\n  recent [limit]                     Show recent coins\n  top-volume [limit]                 Show top volume (24h)\n  analytics [limit]                  Show top coin analytics\n  alerts [limit]                     Show recent alerts\n  dispatch-alerts                    Print + mark unsent alerts (text only)\n  dispatch-alerts-rich               Print JSON payload + media files for relay\n  watchlist:add <addr> [list] [lbl]  Add coin to watchlist\n  watchlist:remove <addr> [list]     Remove coin from watchlist\n  watchlist:list [list]              Show watchlist with analytics\n  watchlist:moves [list] [limit]     Show recent moves for watched coins\n  first-coin                         Show first known coin in local index\n  contracts                          Show Zora coin factory addresses\n`);
+    console.log(`zora-intelligence commands:\n\n  sync [count]                       Sync recent + top-volume coins\n  poll-once                          Ingest swaps + analytics + alerts once\n  daemon:start                       Start background polling daemon (nohup + pid file)\n  daemon:stop                        Stop daemon\n  daemon:status                      Show daemon status + log tail\n  daemon:run                         Run polling loop in foreground\n  recent [limit]                     Show recent coins\n  top-volume [limit]                 Show top volume (24h)\n  analytics [limit]                  Show top coin analytics\n  alerts [limit]                     Show recent alerts\n  dispatch-alerts                    Print + mark unsent alerts (text only)\n  dispatch-alerts-rich               Print JSON payload + media files for relay
+  arweave:balance                    Check Irys/Arweave balance
+  arweave:upload <file>              Upload a file to Arweave via Irys\n  watchlist:add <addr> [list] [lbl]  Add coin to watchlist\n  watchlist:remove <addr> [list]     Remove coin from watchlist\n  watchlist:list [list]              Show watchlist with analytics\n  watchlist:moves [list] [limit]     Show recent moves for watched coins\n  first-coin                         Show first known coin in local index\n  contracts                          Show Zora coin factory addresses\n`);
     return;
   }
 
@@ -212,6 +214,24 @@ async function main() {
     }
     console.table([row]);
     console.log("Note: this is the first coin in your local indexed dataset.");
+    return;
+  }
+
+  if (cmd === "arweave:balance") {
+    const { getIrysBalance } = await import("./arweave.js");
+    const info = await getIrysBalance();
+    console.log(`Irys address: ${info.address}`);
+    console.log(`Balance: ${info.balance}`);
+    return;
+  }
+
+  if (cmd === "arweave:upload") {
+    const filePath = process.argv[3];
+    if (!filePath) throw new Error("Usage: arweave:upload <file_path>");
+    const { uploadToArweave } = await import("./arweave.js");
+    console.log(`Uploading ${filePath}...`);
+    const url = await uploadToArweave(filePath);
+    console.log(`✅ Uploaded: ${url}`);
     return;
   }
 

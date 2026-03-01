@@ -209,7 +209,7 @@ export function generateMarketContext(dbPath?: string): MarketContext {
     GROUP BY sender_address
     HAVING swaps >= 10
     ORDER BY swaps DESC
-    LIMIT 10
+    LIMIT 15
   `).all() as any[];
 
   const degenProfiles: DegenProfile[] = degenRows.map(d => {
@@ -401,11 +401,135 @@ export function formatCommentaryPrompt(ctx: MarketContext): string {
 }
 
 /**
- * Generate a short LLM commentary for a batch of alert contexts.
- * Stub — returns empty string until wired to an LLM provider.
+ * Resolve wallet addresses to Zora profile handles.
+ * Returns a Map<address, handle>. Silently skips failures.
  */
-export async function generateBatchCommentary(_alertContexts: unknown[]): Promise<string> {
-  return "";
+async function resolveHandles(addresses: string[]): Promise<Map<string, string>> {
+  const { getProfile } = await import("@zoralabs/coins-sdk") as any;
+  const handles = new Map<string, string>();
+  
+  // Limit to 10 lookups to avoid rate limits
+  const unique = [...new Set(addresses)].slice(0, 10);
+  
+  await Promise.allSettled(
+    unique.map(async (addr) => {
+      try {
+        const res = await getProfile({ identifier: addr });
+        const profile = res?.data?.profile;
+        const handle = profile?.handle || profile?.username || profile?.displayName;
+        if (handle) handles.set(addr.toLowerCase(), handle);
+      } catch { /* skip */ }
+    })
+  );
+  
+  return handles;
+}
+
+/**
+ * Extract unique trader addresses from alert contexts.
+ * Looks at the underlying swap data in the DB for the alerted coins.
+ */
+function getTopTraderAddresses(alertContexts: AlertContext[], dbPath?: string): string[] {
+  try {
+    const db = new Database(dbPath || DEFAULT_DB, { readonly: true });
+    const coinAddresses = alertContexts
+      .map(a => (a as any).coinAddress || "")
+      .filter(Boolean);
+    
+    if (coinAddresses.length === 0) return [];
+    
+    const placeholders = coinAddresses.map(() => "?").join(",");
+    const rows = db.prepare(`
+      SELECT sender_address, COUNT(*) as txns
+      FROM coin_swaps
+      WHERE coin_address IN (${placeholders})
+        AND block_timestamp > datetime('now', '-24 hours')
+      GROUP BY sender_address
+      HAVING txns >= 3
+      ORDER BY txns DESC
+      LIMIT 10
+    `).all(...coinAddresses) as any[];
+    
+    db.close();
+    return rows.map(r => r.sender_address);
+  } catch {
+    return [];
+  }
+}
+
+interface AlertContext {
+  symbol: string;
+  name: string;
+  marketCap: number;
+  trend: string;
+  severity: string;
+  type: string;
+  message: string;
+  coinAddress?: string;
+}
+
+/**
+ * Generate a short LLM commentary for a batch of alert contexts.
+ * Uses OpenAI gpt-4o-mini. Non-blocking — returns empty string on failure.
+ */
+export async function generateBatchCommentary(alertContexts: unknown[]): Promise<string> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey || alertContexts.length === 0) return "";
+
+  const contexts = alertContexts as AlertContext[];
+
+  // Resolve trader handles in parallel with prompt building
+  let handleMap = new Map<string, string>();
+  try {
+    // Get coin addresses from contexts
+    const coinAddrs = contexts.map(c => c.coinAddress).filter(Boolean) as string[];
+    
+    // Also try to resolve coin creator addresses
+    const traderAddrs = getTopTraderAddresses(contexts);
+    const allAddrs = [...new Set([...traderAddrs, ...coinAddrs])];
+    
+    if (allAddrs.length > 0) {
+      handleMap = await resolveHandles(allAddrs);
+    }
+  } catch { /* non-blocking */ }
+
+  // Build handle context for the LLM
+  const handleContext = handleMap.size > 0
+    ? `\n\nKnown Zora handles (use @handle when mentioning these traders):\n${
+        [...handleMap.entries()].map(([addr, handle]) => `- ${addr.slice(0, 10)}... → @${handle}`).join("\n")
+      }`
+    : "";
+
+  const alertSummary = contexts.map(c => {
+    return `${c.symbol} (${c.name}): ${c.type}, ${c.severity}, mcap $${c.marketCap.toFixed(0)}, trend ${c.trend}. ${c.message}`;
+  }).join("\n");
+
+  const systemPrompt = `You are Klawley, a sarcastic crypto-trading lobster bot. Generate ONE short, witty commentary line (max 200 chars) about this batch of Zora coin alerts. Be dry, funny, market-aware. No emoji. No hashtags. If you recognize any trader handles from the context below, call them out with @handle format.${handleContext}`;
+
+  try {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-5.2",
+        max_completion_tokens: 100,
+        temperature: 0.9,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: alertSummary },
+        ],
+      }),
+    });
+
+    if (!res.ok) return "";
+    const json = await res.json() as any;
+    return (json.choices?.[0]?.message?.content || "").trim();
+  } catch {
+    return "";
+  }
 }
 
 // CLI entry point

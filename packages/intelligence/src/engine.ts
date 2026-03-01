@@ -1086,7 +1086,7 @@ export class IntelligenceEngine {
     `);
 
     const chartCoinMap = new Map<string, { coinAddress: string; symbol: string | null; name: string | null }>();
-    const alertContexts: Array<{ symbol: string; name: string; marketCap: number; trend: string; severity: string; type: string; message: string }> = [];
+    const alertContexts: Array<{ symbol: string; name: string; coinAddress: string; marketCap: number; trend: string; severity: string; type: string; message: string }> = [];
 
     const lines = rows.map((r) => {
       const sev = r.severity.toUpperCase();
@@ -1107,7 +1107,7 @@ export class IntelligenceEngine {
         chartCoinMap.set(r.entity_id, { coinAddress: r.entity_id, symbol: symbol || null, name: name || null });
       }
       if (r.entity_id) {
-        alertContexts.push({ symbol: symbol || "unknown", name: name || "unknown", marketCap: marketCapUsd, trend: trend.word, severity: sev, type: r.type, message: r.message });
+        alertContexts.push({ symbol: symbol || "unknown", name: name || "unknown", coinAddress: r.entity_id, marketCap: marketCapUsd, trend: trend.word, severity: sev, type: r.type, message: r.message });
       }
 
       return `- [${sev}] ${r.type}${coinMeta} — ${finalMessage}`;
