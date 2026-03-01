@@ -35,6 +35,15 @@ interface CoinMovement {
   buyPressure: number; // buy_vol / sell_vol
 }
 
+interface CoinTrade {
+  symbol: string;
+  name: string;
+  address: string;
+  buys: number;
+  sells: number;
+  netFlow: number; // positive = net buyer, negative = net seller
+}
+
 interface DegenProfile {
   address: string;
   swaps: number;
@@ -42,6 +51,7 @@ interface DegenProfile {
   buys: number;
   sells: number;
   style: "ape" | "flipper" | "hodler" | "exit-only";
+  coinTrades: CoinTrade[];
 }
 
 interface FreshLaunch {
@@ -209,8 +219,23 @@ export function generateMarketContext(dbPath?: string): MarketContext {
     GROUP BY sender_address
     HAVING swaps >= 10
     ORDER BY swaps DESC
-    LIMIT 15
+    LIMIT 25
   `).all() as any[];
+
+  // Per-trader coin breakdown
+  const traderCoinStmt = db.prepare(`
+    SELECT cs.coin_address, c.symbol, c.name,
+           sum(case when cs.activity_type='BUY' then 1 else 0 end) as buys,
+           sum(case when cs.activity_type='SELL' then 1 else 0 end) as sells,
+           sum(case when cs.activity_type='BUY' then cs.amount_usdc else -cs.amount_usdc end) as net_flow
+    FROM coin_swaps cs
+    LEFT JOIN coins c ON c.address = cs.coin_address
+    WHERE cs.sender_address = ?
+      AND cs.block_timestamp > datetime('now', '-24 hours')
+    GROUP BY cs.coin_address
+    ORDER BY (buys + sells) DESC
+    LIMIT 5
+  `);
 
   const degenProfiles: DegenProfile[] = degenRows.map(d => {
     let style: DegenProfile["style"] = "flipper";
@@ -218,6 +243,17 @@ export function generateMarketContext(dbPath?: string): MarketContext {
     else if (d.buys === 0) style = "exit-only";
     else if (d.buys > d.sells * 3) style = "hodler";
     else style = "flipper";
+
+    const coinRows = traderCoinStmt.all(d.sender_address) as any[];
+    const coinTrades: CoinTrade[] = coinRows.map(ct => ({
+      symbol: ct.symbol || "???",
+      name: ct.name || "Unknown",
+      address: ct.coin_address,
+      buys: ct.buys,
+      sells: ct.sells,
+      netFlow: ct.net_flow || 0,
+    }));
+
     return {
       address: d.sender_address,
       swaps: d.swaps,
@@ -225,6 +261,7 @@ export function generateMarketContext(dbPath?: string): MarketContext {
       buys: d.buys,
       sells: d.sells,
       style,
+      coinTrades,
     };
   });
 
@@ -333,7 +370,7 @@ export function generateMarketContext(dbPath?: string): MarketContext {
  * Format MarketContext into a prompt-ready text block for Klawley.
  */
 export async function formatCommentaryPrompt(ctx: MarketContext): Promise<string> {
-  // Resolve degen profile addresses to Zora handles
+  // Resolve degen profile addresses to Zora handles (up to 25)
   const degenAddresses = ctx.degenProfiles.map(d => d.address);
   const handleMap = degenAddresses.length > 0 ? await resolveHandles(degenAddresses) : new Map<string, string>();
 
@@ -391,13 +428,36 @@ export async function formatCommentaryPrompt(ctx: MarketContext): Promise<string
     lines.push("");
   }
 
-  // Degen profiles
+  // Degen profiles — prioritize traders with resolved handles
   if (ctx.degenProfiles.length > 0) {
+    // Sort: resolved handles first, then by swap count
+    const sorted = [...ctx.degenProfiles].sort((a, b) => {
+      const aHas = handleMap.has(a.address.toLowerCase()) ? 1 : 0;
+      const bHas = handleMap.has(b.address.toLowerCase()) ? 1 : 0;
+      if (aHas !== bHas) return bHas - aHas;
+      return b.swaps - a.swaps;
+    });
+
+    // Show up to 10, but only include unresolved if we have fewer than 5 resolved
+    const resolved = sorted.filter(d => handleMap.has(d.address.toLowerCase()));
+    const unresolved = sorted.filter(d => !handleMap.has(d.address.toLowerCase()));
+    const show = resolved.length >= 5
+      ? resolved.slice(0, 10)
+      : [...resolved, ...unresolved.slice(0, 5 - resolved.length)];
+
     lines.push("## 🎰 TOP DEGENS (the usual suspects)");
-    for (const d of ctx.degenProfiles.slice(0, 5)) {
+    for (const d of show) {
       const handle = handleMap.get(d.address.toLowerCase());
       const label = handle ? `@${handle} (${d.address.slice(0, 6)}…)` : `${d.address.slice(0, 8)}...${d.address.slice(-4)}`;
-      lines.push(`- **${label}**: ${d.swaps} swaps across ${d.coins} coins (${d.buys}B/${d.sells}S) — style: ${d.style}`);
+
+      // Coin trade breakdown
+      const trades = d.coinTrades.map(ct => {
+        const action = ct.sells === 0 ? "bought" : ct.buys === 0 ? "sold" : "traded";
+        return `$${ct.symbol} (${ct.buys}B/${ct.sells}S)`;
+      }).join(", ");
+
+      lines.push(`- **${label}**: ${d.swaps} swaps across ${d.coins} coins — ${d.style}`);
+      if (trades) lines.push(`  → ${trades}`);
     }
     lines.push("");
   }
@@ -413,8 +473,8 @@ async function resolveHandles(addresses: string[]): Promise<Map<string, string>>
   const { getProfile } = await import("@zoralabs/coins-sdk") as any;
   const handles = new Map<string, string>();
   
-  // Limit to 10 lookups to avoid rate limits
-  const unique = [...new Set(addresses)].slice(0, 10);
+  // Limit to 25 lookups to avoid rate limits
+  const unique = [...new Set(addresses)].slice(0, 25);
   
   await Promise.allSettled(
     unique.map(async (addr) => {
