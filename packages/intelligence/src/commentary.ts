@@ -46,6 +46,7 @@ interface CoinTrade {
 
 interface DegenProfile {
   address: string;
+  handle: string; // Zora display name / ENS / truncated address
   swaps: number;
   coins: number;
   buys: number;
@@ -209,14 +210,16 @@ export function generateMarketContext(dbPath?: string): MarketContext {
 
   // === DEGEN PROFILES ===
   const degenRows = db.prepare(`
-    SELECT sender_address,
+    SELECT cs.sender_address,
+           a.last_profile_handle as handle,
            count(*) as swaps,
-           count(distinct coin_address) as coins,
-           sum(case when activity_type='BUY' then 1 else 0 end) as buys,
-           sum(case when activity_type='SELL' then 1 else 0 end) as sells
-    FROM coin_swaps
-    WHERE block_timestamp > datetime('now', '-24 hours')
-    GROUP BY sender_address
+           count(distinct cs.coin_address) as coins,
+           sum(case when cs.activity_type='BUY' then 1 else 0 end) as buys,
+           sum(case when cs.activity_type='SELL' then 1 else 0 end) as sells
+    FROM coin_swaps cs
+    LEFT JOIN addresses a ON cs.sender_address = a.address
+    WHERE cs.block_timestamp > datetime('now', '-24 hours')
+    GROUP BY cs.sender_address
     HAVING swaps >= 10
     ORDER BY swaps DESC
     LIMIT 25
@@ -254,8 +257,14 @@ export function generateMarketContext(dbPath?: string): MarketContext {
       netFlow: ct.net_flow || 0,
     }));
 
+    // Use Zora handle if available, otherwise truncated address
+    const handle = d.handle && !d.handle.startsWith("0x")
+      ? d.handle
+      : d.handle || (d.sender_address.slice(0, 6) + "..." + d.sender_address.slice(-4));
+
     return {
       address: d.sender_address,
+      handle,
       swaps: d.swaps,
       coins: d.coins,
       buys: d.buys,
@@ -428,31 +437,32 @@ export async function formatCommentaryPrompt(ctx: MarketContext): Promise<string
     lines.push("");
   }
 
-  // Degen profiles — prioritize traders with resolved handles
+  // Degen profiles — prioritize traders with real handles (not 0x-truncated)
   if (ctx.degenProfiles.length > 0) {
-    // Sort: resolved handles first, then by swap count
+    const hasRealHandle = (d: DegenProfile) => d.handle && !d.handle.startsWith("0x");
+
     const sorted = [...ctx.degenProfiles].sort((a, b) => {
-      const aHas = handleMap.has(a.address.toLowerCase()) ? 1 : 0;
-      const bHas = handleMap.has(b.address.toLowerCase()) ? 1 : 0;
+      const aHas = hasRealHandle(a) ? 1 : 0;
+      const bHas = hasRealHandle(b) ? 1 : 0;
       if (aHas !== bHas) return bHas - aHas;
       return b.swaps - a.swaps;
     });
 
-    // Show up to 10, but only include unresolved if we have fewer than 5 resolved
-    const resolved = sorted.filter(d => handleMap.has(d.address.toLowerCase()));
-    const unresolved = sorted.filter(d => !handleMap.has(d.address.toLowerCase()));
-    const show = resolved.length >= 5
-      ? resolved.slice(0, 10)
-      : [...resolved, ...unresolved.slice(0, 5 - resolved.length)];
+    // Show up to 10, prefer those with real handles
+    const withHandles = sorted.filter(hasRealHandle);
+    const without = sorted.filter(d => !hasRealHandle(d));
+    const show = withHandles.length >= 5
+      ? withHandles.slice(0, 10)
+      : [...withHandles, ...without.slice(0, 10 - withHandles.length)];
 
     lines.push("## 🎰 TOP DEGENS (the usual suspects)");
     for (const d of show) {
-      const handle = handleMap.get(d.address.toLowerCase());
-      const label = handle ? `@${handle} (${d.address.slice(0, 6)}…)` : `${d.address.slice(0, 8)}...${d.address.slice(-4)}`;
+      const label = hasRealHandle(d)
+        ? `@${d.handle} (${d.address.slice(0, 6)}…)`
+        : `${d.address.slice(0, 8)}...${d.address.slice(-4)}`;
 
       // Coin trade breakdown
       const trades = d.coinTrades.map(ct => {
-        const action = ct.sells === 0 ? "bought" : ct.buys === 0 ? "sold" : "traded";
         return `$${ct.symbol} (${ct.buys}B/${ct.sells}S)`;
       }).join(", ");
 
