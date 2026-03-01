@@ -400,6 +400,14 @@ export function formatCommentaryPrompt(ctx: MarketContext): string {
   return lines.join("\n");
 }
 
+/**
+ * Generate a short LLM commentary for a batch of alert contexts.
+ * Stub — returns empty string until wired to an LLM provider.
+ */
+export async function generateBatchCommentary(_alertContexts: unknown[]): Promise<string> {
+  return "";
+}
+
 // CLI entry point
 if (import.meta.url === `file://${process.argv[1]}`) {
   const ctx = generateMarketContext();

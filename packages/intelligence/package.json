@@ -41,6 +41,7 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "@farcaster/hub-nodejs": "^0.15.10",
     "@zoralabs/coins-sdk": "^0.4.3",
     "@zoralabs/protocol-deployments": "^0.7.2",
     "better-sqlite3": "^12.6.2",
