@@ -16,6 +16,16 @@ export interface SendUserOperationResult {
   provider: string;
 }
 
+export interface UserOperationReceiptRpcResult {
+  receipt: {
+    transactionHash?: Hex;
+    blockNumber?: Hex;
+  };
+  success?: boolean;
+  actualGasCost?: Hex;
+  actualGasUsed?: Hex;
+}
+
 export interface UserOperationReceipt {
   included: boolean;
   txHash?: Hex;
@@ -24,7 +34,7 @@ export interface UserOperationReceipt {
   actualGasCost?: Hex;
   actualGasUsed?: Hex;
   reason?: string;
-  raw?: unknown;
+  raw?: UserOperationReceiptRpcResult;
 }
 
 export interface BundlerAdapter {
@@ -35,7 +45,7 @@ export interface BundlerAdapter {
   estimateUserOperationGas(userOp: UserOperationLike): Promise<UserOperationGasEstimate>;
   sendUserOperation(userOp: UserOperationLike): Promise<SendUserOperationResult>;
   getUserOperationReceipt(userOpHash: Hex): Promise<UserOperationReceipt>;
-  getUserOperationByHash(userOpHash: Hex): Promise<unknown | null>;
+  getUserOperationByHash(userOpHash: Hex): Promise<unknown>;
   supportedEntryPoints(): Promise<Hex[]>;
 }
 

@@ -56,12 +56,17 @@ export class BundlerRouter {
       }
     }
 
+    const secondary = this.secondary;
+    if (!secondary) {
+      throw new Error("Secondary bundler became unavailable during failover");
+    }
+
     const secondaryResult = await withTimeout(
-      this.secondary!.sendUserOperation(userOp),
+      secondary.sendUserOperation(userOp),
       this.cfg.sendTimeoutMs,
-      `${this.secondary!.name}.sendUserOperation`,
+      `${secondary.name}.sendUserOperation`,
     );
-    attempts.push({ provider: this.secondary!.name, ok: true });
+    attempts.push({ provider: secondary.name, ok: true });
     return {
       primary: this.primary.name,
       attempts,
@@ -94,21 +99,26 @@ export class BundlerRouter {
         throw error;
       });
 
+    const secondary = this.secondary;
+    if (!secondary) {
+      return this.send(userOp);
+    }
+
     const secondaryPromise = (async () => {
       await sleep(this.cfg.hedgeDelayMs);
       return withTimeout(
-        this.secondary!.sendUserOperation(userOp),
+        secondary.sendUserOperation(userOp),
         this.cfg.sendTimeoutMs,
-        `${this.secondary!.name}.sendUserOperation`,
+        `${secondary.name}.sendUserOperation`,
       );
     })()
       .then((result) => {
-        attempts.push({ provider: this.secondary!.name, ok: true });
+        attempts.push({ provider: secondary.name, ok: true });
         return result;
       })
       .catch((error) => {
         attempts.push({
-          provider: this.secondary!.name,
+          provider: secondary.name,
           ok: false,
           error: error instanceof Error ? error.message : String(error),
         });

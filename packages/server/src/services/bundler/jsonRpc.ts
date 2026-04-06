@@ -55,7 +55,7 @@ export async function rpcCall<T>(url: string, method: string, params: unknown[],
     return payload.result;
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
-      throw new Error(`RPC ${method} timeout after ${timeoutMs}ms`);
+      throw new Error(`RPC ${method} timeout after ${timeoutMs}ms`, { cause: error });
     }
     throw error;
   } finally {

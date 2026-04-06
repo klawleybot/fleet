@@ -1,5 +1,5 @@
 import { createBundlerClient, createPaymasterClient } from "viem/account-abstraction";
-import { http, type Chain, type PublicClient } from "viem";
+import { http, type Chain } from "viem";
 import type { SmartAccount } from "viem/account-abstraction";
 import { getChainConfig } from "../network.js";
 import type { BundlerRouterConfig, Hex } from "./types.js";
@@ -99,10 +99,13 @@ export function getBundlerChainId(): number {
  * When PIMLICO_GAS_POLICY_ID is set, user operations are sponsored
  * (no per-wallet ETH needed for gas).
  */
+type BundlerClientBaseConfig = Parameters<typeof createBundlerClient>[0];
+type BundlerClientCompat = NonNullable<BundlerClientBaseConfig["client"]>;
+
 export function createSponsoredBundlerClient(opts: {
   account: SmartAccount;
   chain: Chain;
-  client: any;
+  client: BundlerClientCompat;
   bundlerUrl?: string;
 }) {
   const bundlerCfg = loadBundlerConfigFromEnv();

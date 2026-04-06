@@ -6,6 +6,7 @@ import type {
   UserOperationGasEstimate,
   UserOperationLike,
   UserOperationReceipt,
+  UserOperationReceiptRpcResult,
 } from "./types.js";
 
 interface HttpBundlerAdapterInput {
@@ -56,7 +57,7 @@ export class HttpBundlerAdapter implements BundlerAdapter {
   }
 
   async getUserOperationReceipt(userOpHash: Hex): Promise<UserOperationReceipt> {
-    const raw = await rpcCall<any>(
+    const raw = await rpcCall<UserOperationReceiptRpcResult | null>(
       this.rpcUrl,
       "eth_getUserOperationReceipt",
       [userOpHash],
@@ -65,21 +66,21 @@ export class HttpBundlerAdapter implements BundlerAdapter {
 
     if (!raw) return { included: false };
 
-    const blockNumber = raw.receipt?.blockNumber ? BigInt(raw.receipt.blockNumber) : null;
+    const blockNumber = raw.receipt.blockNumber ? BigInt(raw.receipt.blockNumber) : null;
 
     return {
       included: true,
-      txHash: raw.receipt?.transactionHash,
+      ...(raw.receipt.transactionHash ? { txHash: raw.receipt.transactionHash } : {}),
       ...(blockNumber !== null ? { blockNumber } : {}),
-      success: raw.success,
-      actualGasCost: raw.actualGasCost,
-      actualGasUsed: raw.actualGasUsed,
+      ...(raw.success !== undefined ? { success: raw.success } : {}),
+      ...(raw.actualGasCost ? { actualGasCost: raw.actualGasCost } : {}),
+      ...(raw.actualGasUsed ? { actualGasUsed: raw.actualGasUsed } : {}),
       raw,
     };
   }
 
-  async getUserOperationByHash(userOpHash: Hex): Promise<unknown | null> {
-    return rpcCall<unknown | null>(this.rpcUrl, "eth_getUserOperationByHash", [userOpHash], this.timeoutMs);
+  async getUserOperationByHash(userOpHash: Hex): Promise<unknown> {
+    return rpcCall<unknown>(this.rpcUrl, "eth_getUserOperationByHash", [userOpHash], this.timeoutMs);
   }
 
   async supportedEntryPoints(): Promise<Hex[]> {
