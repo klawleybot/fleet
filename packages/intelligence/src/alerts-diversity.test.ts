@@ -21,20 +21,34 @@ test("selectDiverseAlerts enforces max per coin", () => {
   assert.equal(out.filter((r) => r.entity_id === "0x1").length, 1);
 });
 
-test("selectDiverseAlerts respects cooldown for non-high alerts", () => {
+test("selectDiverseAlerts respects cooldown for repeated alerts", () => {
   const rows = [
     { id: 10, type: "A", entity_id: "0x1", severity: "medium", message: "" },
     { id: 9, type: "A", entity_id: "0x2", severity: "medium", message: "" },
   ];
-  const meta = new Map<string, { lastSentAt?: string | null }>([["0x1", { lastSentAt: new Date().toISOString() }]]);
-  const out = selectDiverseAlerts(rows, 2, opts, meta as any);
+  const meta = new Map<string, { lastSentAt?: string | null; recentCount?: number }>([
+    ["0x1", { lastSentAt: new Date().toISOString(), recentCount: 1 }],
+  ]);
+  const out = selectDiverseAlerts(rows, 2, opts, meta);
   assert.equal(out.length, 1);
-  assert.equal(out[0].entity_id, "0x2");
+  assert.equal(out[0]?.entity_id, "0x2");
 });
 
-test("selectDiverseAlerts allows high severity through cooldown", () => {
+test("selectDiverseAlerts also cooldown-blocks repeated high severity alerts", () => {
   const rows = [{ id: 10, type: "A", entity_id: "0x1", severity: "high", message: "" }];
-  const meta = new Map([["0x1", { lastSentAt: new Date().toISOString() }]]);
-  const out = selectDiverseAlerts(rows, 1, opts, meta as any);
+  const meta = new Map<string, { lastSentAt?: string | null; recentCount?: number }>([
+    ["0x1", { lastSentAt: new Date().toISOString(), recentCount: 2 }],
+  ]);
+  const out = selectDiverseAlerts(rows, 1, opts, meta);
+  assert.equal(out.length, 0);
+});
+
+
+test("selectDiverseAlerts allows first-time alerts through cooldown window", () => {
+  const rows = [{ id: 10, type: "A", entity_id: "0x1", severity: "high", message: "" }];
+  const meta = new Map<string, { lastSentAt?: string | null; recentCount?: number }>([
+    ["0x1", { lastSentAt: new Date().toISOString(), recentCount: 0 }],
+  ]);
+  const out = selectDiverseAlerts(rows, 1, opts, meta);
   assert.equal(out.length, 1);
 });

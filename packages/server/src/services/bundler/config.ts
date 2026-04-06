@@ -1,5 +1,5 @@
 import { createBundlerClient, createPaymasterClient } from "viem/account-abstraction";
-import { http, type Chain, type Client } from "viem";
+import { http, type Chain, type PublicClient } from "viem";
 import type { SmartAccount } from "viem/account-abstraction";
 import { getChainConfig } from "../network.js";
 import type { BundlerRouterConfig, Hex } from "./types.js";
@@ -102,7 +102,7 @@ export function getBundlerChainId(): number {
 export function createSponsoredBundlerClient(opts: {
   account: SmartAccount;
   chain: Chain;
-  client: Client;
+  client: any;
   bundlerUrl?: string;
 }) {
   const bundlerCfg = loadBundlerConfigFromEnv();

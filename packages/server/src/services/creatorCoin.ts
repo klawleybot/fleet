@@ -12,6 +12,7 @@ import {
   type Address,
   type Hex,
   type Log,
+  type PublicClient,
   createPublicClient,
   http,
 } from "viem";
@@ -128,9 +129,9 @@ export async function deployCreatorCoin(
     symbol: params.metadata.symbol,
     metadataURI: params.metadata.metadataURI,
     chainId,
-    platformReferrer: params.platformReferrer,
-    additionalOwners: params.additionalOwners,
-    payoutRecipientOverride: params.payoutRecipient,
+    ...(params.platformReferrer && { platformReferrer: params.platformReferrer }),
+    ...(params.additionalOwners && { additionalOwners: params.additionalOwners }),
+    ...(params.payoutRecipient && { payoutRecipientOverride: params.payoutRecipient }),
   });
 
   const call = createResponse.calls[0]!;
@@ -144,18 +145,20 @@ export async function deployCreatorCoin(
   const { createSponsoredBundlerClient } = await import("./bundler/config.js");
 
   const account = privateKeyToAccount(privateKey);
-  const publicClient = createPublicClient({ chain: base, transport: http() });
+  const publicClient = createPublicClient({ chain: base, transport: http(process.env.BASE_RPC_URL || undefined) });
 
   const smartAccount = await toCoinbaseSmartAccount({
     client: publicClient,
     owners: [account],
     address: params.creator,
+    version: "1.1",
   });
 
+  const bundlerCompatClient = publicClient as unknown as NonNullable<Parameters<typeof import("viem/account-abstraction").createBundlerClient>[0]["client"]>;
   const bundlerClient = createSponsoredBundlerClient({
     account: smartAccount,
     chain: base,
-    client: publicClient,
+    client: bundlerCompatClient,
   });
 
   logger.info("Sending creator coin deployment as sponsored UserOp");

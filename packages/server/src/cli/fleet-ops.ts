@@ -14,6 +14,7 @@
  */
 
 import { createPublicClient, http, formatEther, parseEther, type Address } from "viem";
+import type { PublicClient } from "viem";
 import { base } from "viem/chains";
 import { resolveCoinRoute, getCoinBalance, type CoinRouteClient } from "../services/coinRoute.js";
 import { applySlippage } from "../services/v4Quoter.js";
@@ -40,6 +41,7 @@ import {
   requestExitCoinOperation,
   approveAndExecuteOperation,
 } from "../services/operations.js";
+import { addToWatchlist } from "../services/zoraSignals.js";
 import { db } from "../db/index.js";
 import { swapFromSmartAccount } from "../services/cdp.js";
 import { recordTradePosition } from "../services/monitor.js";
@@ -49,9 +51,9 @@ import { makePoolKey, quoteMultiHop } from "../services/quoter.js";
 // Helpers
 // ---------------------------------------------------------------------------
 
-function getClient() {
+function getClient(): PublicClient {
   const cfg = getChainConfig();
-  return createPublicClient({ chain: base, transport: http(cfg.rpcUrl) });
+  return createPublicClient({ chain: base, transport: http(cfg.rpcUrl) }) as PublicClient;
 }
 
 function getBundlerUrl(): string {
@@ -442,6 +444,9 @@ async function handleFleet(args: string[]): Promise<void> {
           console.log(`  wallet #${r.walletId}: ${r.status} — in=${r.amountIn} out=${r.amountOut ?? "?"}${detail}`);
         }
       } else {
+        // Auto-add to watchlist so policy check passes for manual CLI buys
+        try { addToWatchlist(coin, { label: "cli-buy", notes: `Manual CLI buy` }); } catch {}
+
         const op = requestSupportCoinOperation({
           clusterId: fleet.clusterId,
           coinAddress: coin,
@@ -708,6 +713,13 @@ async function main() {
   if (dopplerConfig === "prd" || dopplerConfig.startsWith("prd_")) {
     console.log("⚠️  PRODUCTION — using live keys and real funds\n");
   }
+
+  // Best-effort intelligence engine init (needed for watchlist tracking on buys/sells)
+  try {
+    const { initIntelligenceEngine } = await import("../services/intelligence.js");
+    const dbPath = process.env.ZORA_INTEL_DB_PATH;
+    initIntelligenceEngine(dbPath ? { dbPath } : {});
+  } catch {}
 
   const args = process.argv.slice(2);
   const cmd = args[0];

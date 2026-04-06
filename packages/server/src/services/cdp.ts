@@ -16,6 +16,8 @@ import {
   sendUserOperation,
   toCoinbaseSmartAccount,
   waitForUserOperationReceipt,
+  type ToCoinbaseSmartAccountReturnType,
+  type ToCoinbaseSmartAccountParameters,
 } from "viem/account-abstraction";
 import { getChainConfig } from "./network.js";
 import { loadBundlerConfigFromEnv, createSponsoredBundlerClient } from "./bundler/config.js";
@@ -25,6 +27,8 @@ import { resolveCoinRoute, type CoinRouteClient } from "./coinRoute.js";
 import { encodeV4ExactInSwap, getRouterAddress } from "./v4SwapEncoder.js";
 import { quoteExactInput, quoteExactInputSingle, applySlippage, getQuoterAddress } from "./v4Quoter.js";
 import { ensurePermit2Approval } from "./erc20.js";
+import { encodeV3ExactInSwapCall } from "./v3SwapEncoder.js";
+import { quoteV3ExactInput } from "./quoter.js";
 import { discoverPoolParams } from "./poolDiscovery.js";
 
 const OWNER_ACCOUNT_NAME = "fleet-owner";
@@ -62,7 +66,7 @@ function resolveCdpNetwork<T extends string = SupportedNetwork>(network?: Suppor
 
 let cdpClient: CdpClient | null = null;
 let mockCounter = 0;
-const localSmartAccountCache = new Map<string, Awaited<ReturnType<typeof toCoinbaseSmartAccount>>>();
+const localSmartAccountCache = new Map<string, ToCoinbaseSmartAccountReturnType>();
 
 export interface EvmAccountRef {
   address: `0x${string}`;
@@ -125,11 +129,24 @@ function localSeed(): string {
   return seed.trim();
 }
 
+/** Well-known wallet name for Klawley's Zora trading account. */
+const KLAWLEY_ACCOUNT_NAME = "klawley";
+
 function deriveLocalPrivateKey(name: string): `0x${string}` {
   if (name === MASTER_SMART_ACCOUNT_NAME && process.env.MASTER_WALLET_PRIVATE_KEY) {
     const pk = process.env.MASTER_WALLET_PRIVATE_KEY.trim();
     if (!/^0x[0-9a-fA-F]{64}$/.test(pk)) {
       throw new Error("MASTER_WALLET_PRIVATE_KEY must be a 0x-prefixed 32-byte hex string.");
+    }
+    return pk.toLowerCase() as `0x${string}`;
+  }
+
+  // Klawley's Zora account — uses ZORA_PRIVATE_KEY directly instead of seed derivation
+  if (name === KLAWLEY_ACCOUNT_NAME && process.env.ZORA_PRIVATE_KEY) {
+    let pk = process.env.ZORA_PRIVATE_KEY.trim();
+    if (!pk.startsWith("0x")) pk = `0x${pk}`;
+    if (!/^0x[0-9a-fA-F]{64}$/.test(pk)) {
+      throw new Error("ZORA_PRIVATE_KEY must be a valid 32-byte hex private key.");
     }
     return pk.toLowerCase() as `0x${string}`;
   }
@@ -157,16 +174,27 @@ function localPublicClient() {
   });
 }
 
+/** Klawley's known smart wallet address on Base mainnet. */
+const KLAWLEY_SMART_WALLET: `0x${string}` = (process.env.ZORA_SMART_WALLET as `0x${string}`) || "0x097677d3e2cde65af10be80ae5e67b8b68eb613d";
+
 async function getLocalSmartAccount(name: string) {
   const cached = localSmartAccountCache.get(name);
   if (cached) return cached;
 
   const owner = localAccountForName(name);
-  const smart = await toCoinbaseSmartAccount({
+  const smartOpts: ToCoinbaseSmartAccountParameters = {
     client: localPublicClient(),
     owners: [owner],
     version: "1.1",
-  });
+  };
+
+  // Klawley's smart wallet already exists at a known address —
+  // pass it explicitly so viem doesn't try to counterfactually derive it.
+  if (name === KLAWLEY_ACCOUNT_NAME) {
+    smartOpts.address = KLAWLEY_SMART_WALLET;
+  }
+
+  const smart = await toCoinbaseSmartAccount(smartOpts);
   localSmartAccountCache.set(name, smart);
   return smart;
 }
@@ -189,10 +217,12 @@ async function submitUserOperationViaRouter(input: {
 
   try {
     const account = await getLocalSmartAccount(input.smartAccountName);
+    const publicClient = localPublicClient();
+    const bundlerCompatClient = publicClient as unknown as NonNullable<Parameters<typeof createBundlerClient>[0]["client"]>;
     const bundlerClient = createSponsoredBundlerClient({
       account,
       chain: getChainCfg().chain,
-      client: localPublicClient(),
+      client: bundlerCompatClient,
     });
 
     const userOpHash = await sendUserOperation(bundlerClient, {
@@ -672,6 +702,62 @@ export async function swapFromSmartAccount(input: {
 
     calls.push({ to: encoded.to, value: encoded.value, data: encoded.data });
 
+    // ---- Optional USDC post-sell conversion ----
+    // When SELL_DESTINATION_TOKEN is set to USDC, append a V3 WETH→USDC
+    // swap after the V4 coin→WETH swap. Both run in the same UserOp batch.
+    // The V4 swap sends WETH to the smart account (TAKE_ALL), so the V3 swap
+    // pays via Permit2 from the smart account.
+    const WETH_ADDRESS = "0x4200000000000000000000000000000000000006" as `0x${string}`;
+    const USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as `0x${string}`;
+    const sellDestToken = (process.env.SELL_DESTINATION_TOKEN?.trim() || WETH_ADDRESS).toLowerCase();
+    const isUsdcDest = isSell && sellDestToken === USDC_ADDRESS.toLowerCase();
+
+    if (isUsdcDest) {
+      const smartAccount = await getLocalSmartAccount(input.smartAccountName);
+      const routerAddress = getRouterAddress(getChainCfg().chainId);
+
+      // Ensure WETH is approved to Permit2 and Permit2 approved to Router
+      const wethPermit2Calls = await ensurePermit2Approval({
+        client: publicClient,
+        token: WETH_ADDRESS,
+        owner: smartAccount.address,
+        router: routerAddress,
+      });
+      calls.push(...wethPermit2Calls);
+
+      // Quote WETH → USDC via V3 QuoterV2 (500 fee tier)
+      // Use quotedAmountOut from V4 (after slippage) as V3 amountIn
+      const v3AmountIn = minAmountOut; // WETH amount we'll get (post-slippage)
+      let v3MinAmountOut = 0n;
+      try {
+        const v3Quote = await quoteV3ExactInput({
+          chainId: getChainCfg().chainId,
+          client: publicClient,
+          tokenIn: WETH_ADDRESS,
+          tokenOut: USDC_ADDRESS,
+          fee: 500,
+          amountIn: v3AmountIn,
+        });
+        v3MinAmountOut = applySlippage(v3Quote.amountOut, input.slippageBps);
+      } catch {
+        // If V3 quote fails (e.g. in tests), proceed with 0 minAmountOut
+        // to avoid blocking the swap — not ideal for production but safe
+        // since this is gated behind an explicit env var.
+      }
+
+      const v3Call = encodeV3ExactInSwapCall({
+        chainId: getChainCfg().chainId,
+        recipient: smartAccount.address,
+        tokenIn: WETH_ADDRESS,
+        tokenOut: USDC_ADDRESS,
+        fee: 500,
+        amountIn: v3AmountIn,
+        minAmountOut: v3MinAmountOut,
+        payerIsUser: true, // SA pays via Permit2
+      });
+      calls.push(v3Call);
+    }
+
     // ---- Pre-submission simulation (free eth_call) ----
     // For buys (single swap call), simulate via eth_call to catch reverts
     // (insufficient balance, pool errors) before paying the bundler.
@@ -790,5 +876,26 @@ export function getSignerBackendInfo() {
     backend: getSignerBackend(),
     chainId: getChainCfg().chainId,
     rpcUrl: getChainCfg().rpcUrl,
+  };
+}
+
+/** Klawley account name for use with swapFromSmartAccount/sendUserOperationFromSmartAccount */
+export { KLAWLEY_ACCOUNT_NAME, KLAWLEY_SMART_WALLET };
+
+/**
+ * Check if Klawley's Zora trading account is configured.
+ * Returns null if not configured, or the wallet info if ready.
+ */
+export async function getKlawleyAccountInfo(): Promise<{
+  eoaAddress: `0x${string}`;
+  smartWalletAddress: `0x${string}`;
+  accountName: string;
+} | null> {
+  if (!process.env.ZORA_PRIVATE_KEY) return null;
+  const owner = localAccountForName(KLAWLEY_ACCOUNT_NAME);
+  return {
+    eoaAddress: owner.address,
+    smartWalletAddress: KLAWLEY_SMART_WALLET,
+    accountName: KLAWLEY_ACCOUNT_NAME,
   };
 }

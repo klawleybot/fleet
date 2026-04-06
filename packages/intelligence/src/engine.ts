@@ -7,6 +7,10 @@ import { applySchema } from "./schema.js";
 import { dedupeAlertRows, type AlertRow } from "./alerts-dedupe.js";
 import { selectDiverseAlerts, type DiversityOptions } from "./alerts-diversity.js";
 import { generateBatchCommentary } from "./commentary.js";
+import { TrendCoinIndexer, applyTrendSchema } from "./trend-coins.js";
+import { TrendScorer } from "./trend-scorer.js";
+import { addBadActor as _addBadActor, removeBadActor as _removeBadActor, listBadActors as _listBadActors, isBadActor as _isBadActor, getBadActorHoldings as _getBadActorHoldings, detectFSH as _detectFSH, cacheBadActorHoldings, getCachedBadActorHoldings, formatBadActorWarning, type BadActor, type BadActorHolding } from "./bad-actors.js";
+import { BadActorTracker } from "./bad-actor-tracker.js";
 
 // SDK function references (loosely-typed to handle SDK export quirks)
 const getCoinSwaps = (zoraSdk as any).getCoinSwaps as (args: any) => Promise<any>;
@@ -32,6 +36,8 @@ export interface IntelligenceConfig {
   alertCoinSwaps1h?: number;
   alertMinMomentum1h?: number;
   alertMinAcceleration1h?: number;
+  alertAccelSpikeMinSwaps1h?: number;
+  alertAccelSpikeMinAcceleration1h?: number;
   alertMaxCoinAlertsPerRun?: number;
   alertDiversityMode?: string;
   alertPerCoinCooldownMin?: number;
@@ -109,6 +115,8 @@ interface ResolvedConfig {
   alertCoinSwaps1h: number;
   alertMinMomentum1h: number;
   alertMinAcceleration1h: number;
+  alertAccelSpikeMinSwaps1h: number;
+  alertAccelSpikeMinAcceleration1h: number;
   alertMaxCoinAlertsPerRun: number;
   alertDiversityMode: string;
   alertPerCoinCooldownMin: number;
@@ -140,9 +148,11 @@ function resolveConfig(input: IntelligenceConfig): ResolvedConfig {
     alertCoinSwaps1h: input.alertCoinSwaps1h ?? 60,
     alertMinMomentum1h: input.alertMinMomentum1h ?? 250,
     alertMinAcceleration1h: input.alertMinAcceleration1h ?? 1.4,
+    alertAccelSpikeMinSwaps1h: input.alertAccelSpikeMinSwaps1h ?? 8,
+    alertAccelSpikeMinAcceleration1h: input.alertAccelSpikeMinAcceleration1h ?? 3.0,
     alertMaxCoinAlertsPerRun: input.alertMaxCoinAlertsPerRun ?? 5,
     alertDiversityMode: input.alertDiversityMode ?? "on",
-    alertPerCoinCooldownMin: input.alertPerCoinCooldownMin ?? 30,
+    alertPerCoinCooldownMin: input.alertPerCoinCooldownMin ?? 60,
     alertMaxPerCoinPerDispatch: input.alertMaxPerCoinPerDispatch ?? 1,
     alertNoveltyWindowHours: input.alertNoveltyWindowHours ?? 12,
     alertLargeCapPenaltyAboveUsd: input.alertLargeCapPenaltyAboveUsd ?? 1_000_000,
@@ -233,6 +243,9 @@ export class IntelligenceEngine {
   readonly db: Database.Database;
   private readonly cfg: ResolvedConfig;
   private apiKeySet = false;
+  readonly trendIndexer: TrendCoinIndexer;
+  readonly trendScorer: TrendScorer;
+  readonly badActorTracker: BadActorTracker | null;
 
   constructor(config: IntelligenceConfig = {}) {
     this.cfg = resolveConfig(config);
@@ -242,10 +255,29 @@ export class IntelligenceEngine {
 
     this.db = new Database(this.cfg.dbPath);
     applySchema(this.db);
+    applyTrendSchema(this.db);
 
     if (config.zoraApiKey && setApiKey && !this.apiKeySet) {
       setApiKey(config.zoraApiKey);
       this.apiKeySet = true;
+    }
+
+    this.trendIndexer = new TrendCoinIndexer(this.db, {
+      ...(process.env.BASE_RPC_URL ? { rpcUrl: process.env.BASE_RPC_URL } : {}),
+      ...(config.zoraApiKey ? { zoraApiKey: config.zoraApiKey } : {}),
+    });
+
+    this.trendScorer = new TrendScorer(this.db);
+
+    // Bad actor cluster tracker — requires BASE_RPC_URL
+    try {
+      this.badActorTracker = new BadActorTracker(this.db, {
+        ...(process.env.BASE_RPC_URL ? { rpcUrl: process.env.BASE_RPC_URL } : {}),
+        maxDepth: 2, // track up to 2 hops
+      });
+    } catch (err: any) {
+      console.warn("[engine] bad actor tracker init failed (no RPC?):", err?.message);
+      this.badActorTracker = null;
     }
   }
 
@@ -363,8 +395,9 @@ export class IntelligenceEngine {
     const sender = String(swap.senderAddress ?? "").toLowerCase();
     const recipient = String(swap.recipientAddress ?? "").toLowerCase();
     const ts = swap.blockTimestamp ?? new Date().toISOString();
-    const amountUsdc = Number(swap.currencyAmountWithPrice?.priceUsdc ?? 0);
+    const priceUsdc = Number(swap.currencyAmountWithPrice?.priceUsdc ?? 0);
     const amountDecimal = Number(swap.currencyAmountWithPrice?.currencyAmount?.amountDecimal ?? 0);
+    const amountUsdc = priceUsdc * amountDecimal;
     const coinAmount = Number(swap.coinAmount ?? 0);
     const result = this.db.prepare(`
       INSERT OR IGNORE INTO coin_swaps (
@@ -457,13 +490,15 @@ export class IntelligenceEngine {
       `INSERT INTO address_clusters (id, heuristic, label, member_count, score, updated_at) VALUES (?, ?, ?, ?, ?, ?)`
     );
     const insertMember = this.db.prepare(
-      `INSERT INTO address_cluster_members (cluster_id, address, weight) VALUES (?, ?, ?)`
+      `INSERT OR IGNORE INTO address_cluster_members (cluster_id, address, weight) VALUES (?, ?, ?)`
     );
 
     clusters.forEach((members, i) => {
       const id = `cluster-${i + 1}`;
-      insertCluster.run(id, "shared-swap-counterparty", `interaction_component_${members.length}`, members.length, members.length, new Date().toISOString());
-      for (const m of members) insertMember.run(id, m, 1);
+      // Deduplicate members within each cluster before inserting
+      const uniqueMembers = [...new Set(members)];
+      insertCluster.run(id, "shared-swap-counterparty", `interaction_component_${uniqueMembers.length}`, uniqueMembers.length, uniqueMembers.length, new Date().toISOString());
+      for (const m of uniqueMembers) insertMember.run(id, m, 1);
     });
 
     return clusters.length;
@@ -577,6 +612,30 @@ export class IntelligenceEngine {
       });
     }
 
+    // Acceleration spike: catches coins with high relative acceleration even at lower absolute volume
+    const accelSpikes = this.db.prepare(`
+      SELECT a.coin_address, c.chain_id,
+             a.swap_count_1h, a.swap_count_prev_1h,
+             a.momentum_score_1h, a.momentum_acceleration_1h,
+             a.swap_count_24h, a.momentum_score
+      FROM coin_analytics a LEFT JOIN coins c ON c.address = a.coin_address
+      WHERE a.swap_count_1h >= ? AND a.momentum_acceleration_1h >= ?
+        AND a.swap_count_prev_1h > 0
+      ORDER BY a.momentum_acceleration_1h DESC LIMIT ?
+    `).all(cfg.alertAccelSpikeMinSwaps1h, cfg.alertAccelSpikeMinAcceleration1h, cfg.alertMaxCoinAlertsPerRun) as Array<any>;
+
+    for (const c of accelSpikes) {
+      alerts.push({
+        type: "COIN_ACCEL_SPIKE", entity_id: c.coin_address,
+        severity: Number(c.momentum_acceleration_1h) >= 5.0 ? "high" : "medium",
+        message: addCoinLinkToMessage(
+          `Acceleration spike: ${c.coin_address} accel1h=${Number(c.momentum_acceleration_1h).toFixed(2)}x swaps1h=${c.swap_count_1h} prev1h=${c.swap_count_prev_1h} momentum1h=${Number(c.momentum_score_1h).toFixed(2)} (swaps24h=${c.swap_count_24h})`,
+          c.coin_address, c.chain_id,
+        ),
+        fingerprint: `coin_accel_spike:${c.coin_address}:${new Date().toISOString().slice(0, 13)}`,
+      });
+    }
+
     const whales = this.db.prepare(`
       SELECT s.id, s.coin_address, c.chain_id, s.sender_address, s.amount_usdc
       FROM coin_swaps s LEFT JOIN coins c ON c.address = s.coin_address
@@ -594,6 +653,27 @@ export class IntelligenceEngine {
         ),
         fingerprint: `whale:${w.id}`,
       });
+    }
+
+    // Chart murder detection — someone selling ≥33% of a coin's liquidity (MC) in a single shot
+    // Filters out micro-caps (<$10k MC) to avoid noise
+    try {
+      const fshList = _detectFSH(this.db, 6, 33, 10_000);
+      const existingActors = new Set(_listBadActors(this.db).map(a => a.address));
+      for (const fsh of fshList.slice(0, 3)) {
+        if (existingActors.has(fsh.address.toLowerCase())) continue;
+        const pct = fsh.liquidityPct.toFixed(0);
+        const who = fsh.handle || fsh.address.slice(0, 12) + "...";
+        const mcFmt = fsh.coinMarketCapUsd >= 1000 ? `$${(fsh.coinMarketCapUsd / 1000).toFixed(0)}k` : `$${fsh.coinMarketCapUsd.toFixed(0)}`;
+        alerts.push({
+          type: "CHART_MURDER", entity_id: fsh.coinAddress,
+          severity: fsh.liquidityPct >= 50 ? "high" : "medium",
+          message: `🔪 Chart murder: ${who} sold ${pct}% of ${fsh.coinSymbol || fsh.coinAddress}'s liquidity ($${fsh.sellAmountUsdc.toFixed(0)} sell vs ${mcFmt} MC). Consider adding to bad actor list.`,
+          fingerprint: `chart_murder:${fsh.address}:${fsh.coinAddress}:${new Date().toISOString().slice(0, 13)}`,
+        });
+      }
+    } catch (err: any) {
+      console.warn("[engine] chart murder detection error:", err?.message);
     }
 
     alerts.push(...this.watchlistAlertCandidates());
@@ -687,6 +767,34 @@ export class IntelligenceEngine {
     const clusters = this.rebuildClusters();
     const analytics = this.refreshAnalytics();
     const alerts = this.generateAlerts();
+
+    // Trend coin indexing — runs every tick alongside the main loop
+    try {
+      const trendResult = await this.trendIndexer.tick();
+      console.log(`[engine] trend tick: chain=${trendResult.chainEvents} api=${trendResult.apiDiscovered} enriched=${trendResult.enriched} alerts=${trendResult.alerts}`);
+    } catch (err: any) {
+      console.warn("[engine] trend indexer error:", err?.message);
+    }
+
+    // Refresh bad actor holdings cache
+    try {
+      await this.refreshBadActorHoldings();
+    } catch (err: any) {
+      console.warn("[engine] bad actor holdings refresh error:", err?.message);
+    }
+
+    // Bad actor cluster tracking — scan for fund transfers
+    try {
+      if (this.badActorTracker) {
+        const trackerResult = await this.badActorTracker.tick();
+        if (trackerResult.transfersDetected > 0 || trackerResult.autoAdded > 0) {
+          console.log(`[engine] bad actor tracker: scanned=${trackerResult.scannedBlocks} transfers=${trackerResult.transfersDetected} auto-added=${trackerResult.autoAdded}`);
+        }
+      }
+    } catch (err: any) {
+      console.warn("[engine] bad actor tracker error:", err?.message);
+    }
+
     return { syncedRecent, syncedTop, swaps, clusters, analytics, alerts };
   }
 
@@ -1058,6 +1166,57 @@ export class IntelligenceEngine {
   }
 
   // ============================================================
+  // Bad Actors
+  // ============================================================
+
+  addBadActor(address: string, label?: string, reason?: string, severity?: string): void {
+    _addBadActor(this.db, address, label, reason, severity);
+  }
+
+  removeBadActor(address: string): boolean {
+    return _removeBadActor(this.db, address);
+  }
+
+  listBadActors(): BadActor[] {
+    return _listBadActors(this.db);
+  }
+
+  isBadActor(address: string): BadActor | null {
+    return _isBadActor(this.db, address);
+  }
+
+  async getBadActorHoldings(coinAddress: string): Promise<BadActorHolding[]> {
+    return _getBadActorHoldings(this.db, coinAddress, this.cfg.zoraChainId);
+  }
+
+  detectFSH(lookbackHours?: number): ReturnType<typeof _detectFSH> {
+    return _detectFSH(this.db, lookbackHours);
+  }
+
+  async refreshBadActorHoldings(): Promise<number> {
+    const actors = _listBadActors(this.db);
+    if (!actors.length) return 0;
+
+    const watchlistCoins = this.db.prepare(
+      `SELECT DISTINCT coin_address FROM coin_watchlist WHERE enabled = 1`
+    ).all() as Array<{ coin_address: string }>;
+
+    let cached = 0;
+    for (const { coin_address } of watchlistCoins.slice(0, 20)) {
+      try {
+        const holdings = await _getBadActorHoldings(this.db, coin_address, this.cfg.zoraChainId);
+        if (holdings.length > 0) {
+          cacheBadActorHoldings(this.db, holdings);
+          cached += holdings.length;
+        }
+      } catch (err: any) {
+        console.warn(`[bad-actors] holdings refresh failed for ${coin_address}:`, err?.message);
+      }
+    }
+    return cached;
+  }
+
+  // ============================================================
   // Alert dispatch
   // ============================================================
 
@@ -1103,6 +1262,15 @@ export class IntelligenceEngine {
       const mcap = r.entity_id ? ` • mcap $${formatUsd(marketCapUsd)}` : "";
       const coinMeta = r.entity_id ? ` ${coinLabel}${mcap} • ${trend.emoji} momentum ${trend.word}` : "";
 
+      // Append bad actor warnings from cache
+      let badActorNote = "";
+      if (r.entity_id?.startsWith("0x")) {
+        const cached = getCachedBadActorHoldings(this.db, r.entity_id);
+        if (cached.length > 0) {
+          badActorNote = formatBadActorWarning(cached);
+        }
+      }
+
       if (r.entity_id && r.entity_id.startsWith("0x") && !chartCoinMap.has(r.entity_id)) {
         chartCoinMap.set(r.entity_id, { coinAddress: r.entity_id, symbol: symbol || null, name: name || null });
       }
@@ -1110,7 +1278,7 @@ export class IntelligenceEngine {
         alertContexts.push({ symbol: symbol || "unknown", name: name || "unknown", coinAddress: r.entity_id, marketCap: marketCapUsd, trend: trend.word, severity: sev, type: r.type, message: r.message });
       }
 
-      return `- [${sev}] ${r.type}${coinMeta} — ${finalMessage}`;
+      return `- [${sev}] ${r.type}${coinMeta} — ${finalMessage}${badActorNote}`;
     });
 
     const dedupeNote = suppressedCount > 0 ? `, deduped ${suppressedCount}` : "";
