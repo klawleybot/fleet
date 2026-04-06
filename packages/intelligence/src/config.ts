@@ -1,14 +1,32 @@
 import dotenv from "dotenv";
+import path from "node:path";
 import { z } from "zod";
 
 dotenv.config({ quiet: true });
 
+function defaultDbPath(): string {
+  return new URL("../.data/zora-intelligence.db", import.meta.url).pathname;
+}
+
+function resolveDbPath(): string {
+  const explicitPath = process.env.ZORA_INTEL_DB_PATH?.trim()
+    || process.env.INTEL_DB_PATH?.trim()
+    || process.env.DB_PATH?.trim();
+
+  if (process.env.VITEST && !explicitPath) {
+    throw new Error(
+      "DB safety violation: Vitest is active but no intelligence DB path is set. " +
+      "Set ZORA_INTEL_DB_PATH, INTEL_DB_PATH, or DB_PATH in test env so tests never touch the default intelligence database.",
+    );
+  }
+
+  return path.resolve(explicitPath || defaultDbPath());
+}
+
 const envSchema = z.object({
   ZORA_API_KEY: z.string().optional(),
   ZORA_CHAIN_ID: z.coerce.number().default(8453),
-  DB_PATH: z.string().default(
-    new URL("../.data/zora-intelligence.db", import.meta.url).pathname
-  ),
+  DB_PATH: z.string().default(resolveDbPath()),
   POLL_INTERVAL_SEC: z.coerce.number().default(60),
   SWAPS_PER_COIN: z.coerce.number().default(30),
   TRACKED_COIN_COUNT: z.coerce.number().default(75),

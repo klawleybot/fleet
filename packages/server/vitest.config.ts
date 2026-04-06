@@ -5,6 +5,7 @@ import os from "node:os";
 // Unique test DB per vitest invocation — avoids collisions with production DB
 // and stale data between runs. Placed in os.tmpdir so it's auto-cleaned.
 const testDbPath = path.join(os.tmpdir(), `fleet-test-${process.pid}.db`);
+const testIntelDbPath = path.join(os.tmpdir(), `fleet-intel-test-${process.pid}.db`);
 
 export default defineConfig({
   test: {
@@ -20,6 +21,9 @@ export default defineConfig({
       // E2E tests that spawn child processes set their own env.
       CDP_MOCK_MODE: "1",
       SQLITE_PATH: testDbPath,
+      ZORA_INTEL_DB_PATH: testIntelDbPath,
+      INTEL_DB_PATH: testIntelDbPath,
+      DB_PATH: testIntelDbPath,
     },
   },
 });

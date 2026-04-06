@@ -6,6 +6,7 @@ import os from "node:os";
 // E2e tests that spawn child server processes override this with their own
 // temp paths; this default covers any unit-style tests included by this config.
 const testDbPath = path.join(os.tmpdir(), `fleet-e2e-test-${process.pid}.db`);
+const testIntelDbPath = path.join(os.tmpdir(), `fleet-e2e-intel-test-${process.pid}.db`);
 
 export default defineConfig({
   test: {
@@ -20,6 +21,9 @@ export default defineConfig({
       CDP_MOCK_MODE: "1",
       // Redirect any direct DB access away from the production file.
       SQLITE_PATH: testDbPath,
+      ZORA_INTEL_DB_PATH: testIntelDbPath,
+      INTEL_DB_PATH: testIntelDbPath,
+      DB_PATH: testIntelDbPath,
     },
   },
 });
