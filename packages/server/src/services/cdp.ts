@@ -7,7 +7,6 @@ import {
   isAddress,
   isHash,
   keccak256,
-  parseEther,
   toHex,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -20,12 +19,12 @@ import {
   type ToCoinbaseSmartAccountParameters,
 } from "viem/account-abstraction";
 import { getChainConfig } from "./network.js";
-import { loadBundlerConfigFromEnv, createSponsoredBundlerClient } from "./bundler/config.js";
+import { createSponsoredBundlerClient } from "./bundler/config.js";
 import { getBundlerRouter } from "./bundler/index.js";
 import { resolveDeterministicBuyRoute, resolveDeterministicSellRoute } from "./swapRoute.js";
 import { resolveCoinRoute, type CoinRouteClient } from "./coinRoute.js";
 import { encodeV4ExactInSwap, getRouterAddress } from "./v4SwapEncoder.js";
-import { quoteExactInput, quoteExactInputSingle, applySlippage, getQuoterAddress } from "./v4Quoter.js";
+import { quoteExactInput, quoteExactInputSingle, applySlippage } from "./v4Quoter.js";
 import { ensurePermit2Approval } from "./erc20.js";
 import { encodeV3ExactInSwapCall } from "./v3SwapEncoder.js";
 import { quoteV3ExactInput } from "./quoter.js";
@@ -123,9 +122,16 @@ function extractTransactionHash(receipt: unknown, context: string): `0x${string}
   return assertHash(value, context);
 }
 
+function hexToPrefixedHex(value: string, context: string): `0x${string}` {
+  if (!/^[0-9a-f]+$/i.test(value)) {
+    throw new Error(`Invalid hex for ${context}`);
+  }
+  return `0x${value}`;
+}
+
 function mockAddress(kind: "owner" | "smart", name: string): `0x${string}` {
   const digest = createHash("sha256").update(`${kind}:${name}`).digest("hex").slice(0, 40);
-  return `0x${digest}` as `0x${string}`;
+  return hexToPrefixedHex(digest, `mock ${kind} address`);
 }
 
 function mockHash(label: string): `0x${string}` {
@@ -134,7 +140,7 @@ function mockHash(label: string): `0x${string}` {
     .update(`${label}:${Date.now()}:${mockCounter}`)
     .digest("hex")
     .slice(0, 64);
-  return `0x${digest}` as `0x${string}`;
+  return hexToPrefixedHex(digest, `mock hash for ${label}`);
 }
 
 function localSeed(): string {
@@ -191,7 +197,9 @@ function localPublicClient() {
 }
 
 /** Klawley's known smart wallet address on Base mainnet. */
-const KLAWLEY_SMART_WALLET: `0x${string}` = (process.env.ZORA_SMART_WALLET as `0x${string}`) || "0x097677d3e2cde65af10be80ae5e67b8b68eb613d";
+const KLAWLEY_SMART_WALLET = process.env.ZORA_SMART_WALLET
+  ? assertAddress(process.env.ZORA_SMART_WALLET, "ZORA_SMART_WALLET")
+  : "0x097677d3e2cde65af10be80ae5e67b8b68eb613d";
 
 async function getLocalSmartAccount(name: string) {
   const cached = localSmartAccountCache.get(name);
@@ -261,7 +269,9 @@ async function submitUserOperationViaRouter(input: {
     };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    throw new Error(`Direct bundler submission failed for ${input.smartAccountName}: ${msg}`);
+    throw new Error(`Direct bundler submission failed for smart account ${String(input.smartAccountName)}: ${msg}`, {
+      cause: error,
+    });
   }
 }
 
@@ -453,18 +463,20 @@ export async function transferFromOwnerAccount(input: {
   to: `0x${string}`;
   amountWei: bigint;
 }): Promise<{ userOpHash: `0x${string}`; txHash: `0x${string}` | null; status: string }> {
+  const recipient = String(input.to);
+
   if (isCdpMockMode()) {
-    if (!isAddress(input.to)) throw new Error(`Invalid recipient address: ${input.to}`);
+    if (!isAddress(input.to)) throw new Error(`Invalid recipient address: ${recipient}`);
     if (input.amountWei <= 0n) throw new Error("amountWei must be > 0");
     return {
-      userOpHash: mockHash(`mock-owner-transfer-userop:${input.ownerName}`),
-      txHash: mockHash(`mock-owner-transfer-tx:${input.ownerName}`),
+      userOpHash: mockHash(`mock-owner-transfer-userop:${String(input.ownerName)}`),
+      txHash: mockHash(`mock-owner-transfer-tx:${String(input.ownerName)}`),
       status: "complete",
     };
   }
 
   if (getSignerBackend() === "local") {
-    if (!isAddress(input.to)) throw new Error(`Invalid recipient address: ${input.to}`);
+    if (!isAddress(input.to)) throw new Error(`Invalid recipient address: ${recipient}`);
     if (input.amountWei <= 0n) throw new Error("amountWei must be > 0");
 
     const wc = localWalletClient(input.ownerName);
@@ -495,18 +507,20 @@ export async function transferFromSmartAccount(input: {
   amountWei: bigint;
   network?: SupportedNetwork;
 }): Promise<{ userOpHash: `0x${string}`; txHash: `0x${string}` | null; status: string }> {
+  const recipient = String(input.to);
+
   if (isCdpMockMode()) {
-    if (!isAddress(input.to)) throw new Error(`Invalid recipient address: ${input.to}`);
+    if (!isAddress(input.to)) throw new Error(`Invalid recipient address: ${recipient}`);
     if (input.amountWei <= 0n) throw new Error("amountWei must be > 0");
     return {
-      userOpHash: mockHash(`mock-transfer-userop:${input.smartAccountName}`),
-      txHash: mockHash(`mock-transfer-tx:${input.smartAccountName}`),
+      userOpHash: mockHash(`mock-transfer-userop:${String(input.smartAccountName)}`),
+      txHash: mockHash(`mock-transfer-tx:${String(input.smartAccountName)}`),
       status: "complete",
     };
   }
 
   if (getSignerBackend() === "local") {
-    if (!isAddress(input.to)) throw new Error(`Invalid recipient address: ${input.to}`);
+    if (!isAddress(input.to)) throw new Error(`Invalid recipient address: ${recipient}`);
     if (input.amountWei <= 0n) throw new Error("amountWei must be > 0");
 
     return submitUserOperationViaRouter({
@@ -664,8 +678,8 @@ export async function swapFromSmartAccount(input: {
           chainId: getChainCfg().chainId,
           client: publicClient,
           poolKey: {
-            currency0: currency0 as `0x${string}`,
-            currency1: currency1 as `0x${string}`,
+            currency0,
+            currency1,
             fee: hop.fee,
             tickSpacing: hop.tickSpacing,
             hooks: hop.hooks,
@@ -782,7 +796,10 @@ export async function swapFromSmartAccount(input: {
         });
       } catch (simError) {
         const simMsg = simError instanceof Error ? simError.message : String(simError);
-        throw new Error(`Simulation reverted for ${input.smartAccountName} — skipping UserOp: ${simMsg.slice(0, 200)}`);
+        throw new Error(
+          `Simulation reverted for smart account ${String(input.smartAccountName)} — skipping UserOp: ${simMsg.slice(0, 200)}`,
+          { cause: simError },
+        );
       }
     }
 
@@ -890,11 +907,11 @@ export { KLAWLEY_ACCOUNT_NAME, KLAWLEY_SMART_WALLET };
  * Check if Klawley's Zora trading account is configured.
  * Returns null if not configured, or the wallet info if ready.
  */
-export async function getKlawleyAccountInfo(): Promise<{
+export function getKlawleyAccountInfo(): {
   eoaAddress: `0x${string}`;
   smartWalletAddress: `0x${string}`;
   accountName: string;
-} | null> {
+} | null {
   if (!process.env.ZORA_PRIVATE_KEY) return null;
   const owner = localAccountForName(KLAWLEY_ACCOUNT_NAME);
   return {
