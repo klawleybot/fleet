@@ -1,4 +1,4 @@
-import { encodeAbiParameters, decodeAbiParameters, encodeFunctionData, type Address } from "viem";
+import { decodeAbiParameters, encodeFunctionData, type Address } from "viem";
 import type { HopPoolParams } from "./swapRoute.js";
 
 /** Minimal client interface — only needs `call()` for eth_call quotes. */

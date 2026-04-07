@@ -1,4 +1,4 @@
-import { encodeAbiParameters, encodeFunctionData, type Address } from "viem";
+import { encodeAbiParameters, encodeFunctionData } from "viem";
 
 // --- Router addresses per chain ---
 export const UNIVERSAL_ROUTER_ADDRESSES: Record<number, `0x${string}`> = {
@@ -6,7 +6,7 @@ export const UNIVERSAL_ROUTER_ADDRESSES: Record<number, `0x${string}`> = {
   84532: "0x492e6456d9528771018deb9e87ef7750ef184104",
 };
 
-const NATIVE_ETH: Address = "0x0000000000000000000000000000000000000000";
+const NATIVE_ETH = "0x0000000000000000000000000000000000000000";
 
 // --- Command & Action IDs ---
 const V4_SWAP_COMMAND = 0x10;
@@ -143,7 +143,7 @@ export function encodeV4ExactInSwap(params: EncodeV4ExactInSwapParams): EncodedS
   );
 
   // Pack actions as bytes: [0x07, 0x0c, 0x0f]
-  const actionsBytes = `0x${Buffer.from([SWAP_EXACT_IN, SETTLE_ALL, TAKE_ALL]).toString("hex")}` as `0x${string}`;
+  const actionsBytes: `0x${string}` = `0x${Buffer.from([SWAP_EXACT_IN, SETTLE_ALL, TAKE_ALL]).toString("hex")}`;
 
   // Encode V4_SWAP input: abi.encode(bytes actions, bytes[] params)
   const v4SwapInput = encodeAbiParameters(
@@ -155,7 +155,7 @@ export function encodeV4ExactInSwap(params: EncodeV4ExactInSwapParams): EncodedS
   );
 
   // commands = single byte 0x10
-  const commands = `0x${Buffer.from([V4_SWAP_COMMAND]).toString("hex")}` as `0x${string}`;
+  const commands: `0x${string}` = `0x${Buffer.from([V4_SWAP_COMMAND]).toString("hex")}`;
 
   // Encode outer execute call
   const data = encodeFunctionData({
