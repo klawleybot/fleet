@@ -8,26 +8,37 @@
  *
  * Returns a complete buy/sell route with pool params for each hop.
  */
-import {
-  type Address,
-  type PublicClient,
-  encodeFunctionData,
-  decodeFunctionResult,
-  type Hex,
-} from "viem";
+import { type Address, type Hex } from "viem";
 import type { HopPoolParams } from "./swapRoute.js";
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const NATIVE_ETH: Address = "0x0000000000000000000000000000000000000000";
+const NATIVE_ETH = "0x0000000000000000000000000000000000000000";
 const ZORA_TOKEN: Address = "0x1111111111166b7FE7bd91427724B487980aFc69";
+const USDC_BASE: Address = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+const WETH_BASE: Address = "0x4200000000000000000000000000000000000006";
+
+/** Known terminal anchor tokens — any of these ends the ancestry walk. */
+const TERMINAL_ANCHORS = new Set([
+  ZORA_TOKEN.toLowerCase(),
+  USDC_BASE.toLowerCase(),
+  WETH_BASE.toLowerCase(),
+]);
 
 /** ETH(native) / ZORA standard V4 pool — discovered via on-chain quoting. */
 const ETH_ZORA_HOP: HopPoolParams = {
   fee: 3000,
   tickSpacing: 60,
+  hooks: NATIVE_ETH as `0x${string}`,
+  hookData: "0x",
+};
+
+/** USDC / ETH standard Uniswap V3 pool on Base (0.05% fee, no hooks). */
+const ETH_USDC_HOP: HopPoolParams = {
+  fee: 500,
+  tickSpacing: 10,
   hooks: NATIVE_ETH as `0x${string}`,
   hookData: "0x",
 };
@@ -152,14 +163,14 @@ async function readPoolParamsFromStorage(
         return {
           fee,
           tickSpacing,
-          hooks: ("0x" + hookAddr) as `0x${string}`,
+          hooks: `0x${hookAddr}`,
           hookData: "0x",
         };
       }
     }
 
     // No hook found — standard pool
-    return { fee, tickSpacing, hooks: NATIVE_ETH as `0x${string}`, hookData: "0x" };
+    return { fee, tickSpacing, hooks: NATIVE_ETH, hookData: "0x" };
   }
 
   return null;
@@ -189,19 +200,28 @@ export interface CoinRoute {
 /**
  * Resolve the complete buy/sell route for a Zora coin.
  *
- * Walks the coin ancestry (coin → parent → ... → ZORA) via currency() calls,
- * reads pool params from storage for each hop, and prepends the ETH/ZORA hop.
+ * Walks the coin ancestry (coin → parent → ... → terminal anchor) via
+ * currency() calls, reads pool params from storage for each hop, and
+ * prepends the appropriate ETH bridge hop(s).
  *
- * @param maxDepth - Maximum ancestry depth (default 5, prevents infinite loops)
+ * Terminal anchors:
+ * - ZORA token → prepend ETH/ZORA hop
+ * - USDC → prepend ETH/USDC hop (Base app content coins default to USDC
+ *   when the creator has no creator coin)
+ *
+ * Supports up to 6 hops (coin → coin → coin → creator → ZORA → ETH)
+ * to handle deep nesting of content coins.
+ *
+ * @param maxDepth - Maximum ancestry depth (default 6, prevents infinite loops)
  */
 export async function resolveCoinRoute(params: {
   client: CoinRouteClient;
   coinAddress: Address;
   maxDepth?: number;
 }): Promise<CoinRoute> {
-  const { client, coinAddress, maxDepth = 5 } = params;
+  const { client, coinAddress, maxDepth = 6 } = params;
 
-  // Walk ancestry: coin → parent → ... → ZORA
+  // Walk ancestry: coin → parent → ... → terminal anchor
   const ancestry: Address[] = [coinAddress];
   const hopParams: HopPoolParams[] = [];
 
@@ -216,46 +236,77 @@ export async function resolveCoinRoute(params: {
         functionName: "currency",
       })) as Address;
     } catch {
-      // No currency() function — this is not a Zora coin (maybe ZORA token itself)
+      // No currency() function — this is not a Zora coin (maybe a base token)
       break;
     }
 
     // Read pool params from storage
-    const params = await readPoolParamsFromStorage(client, current);
+    let params = await readPoolParamsFromStorage(client, current);
     if (!params) {
-      throw new Error(
-        `Could not read pool params from storage for coin ${current}`,
-      );
+      // Storage layout doesn't match known Zora coin patterns.
+      // This coin might be a non-standard contract (e.g. manually deployed
+      // token with a currency() view but different storage layout).
+      // Try common pool param combinations that work on Base V4 pools.
+      const COMMON_POOL_PARAMS: HopPoolParams[] = [
+        { fee: 10000, tickSpacing: 200, hooks: NATIVE_ETH, hookData: "0x" },
+        { fee: 3000, tickSpacing: 60, hooks: NATIVE_ETH, hookData: "0x" },
+        { fee: 500, tickSpacing: 10, hooks: NATIVE_ETH, hookData: "0x" },
+      ];
+      // Just use the most common Zora default — the quoter will validate it.
+      // If wrong, the swap will fail at quote time (not silently).
+      params = COMMON_POOL_PARAMS[0]!;
     }
     hopParams.push(params);
     ancestry.push(parentCurrency);
 
-    // If parent is ZORA, we're done
-    if (parentCurrency.toLowerCase() === ZORA_TOKEN.toLowerCase()) {
+    // If parent is a terminal anchor (ZORA or USDC), we're done
+    if (TERMINAL_ANCHORS.has(parentCurrency.toLowerCase())) {
       break;
     }
 
     current = parentCurrency;
   }
 
-  // Validate we reached ZORA
+  // Determine which terminal anchor we reached
   const lastAncestor = ancestry[ancestry.length - 1]!;
-  if (lastAncestor.toLowerCase() !== ZORA_TOKEN.toLowerCase()) {
+  const lastAncestorLower = lastAncestor.toLowerCase();
+
+  if (!TERMINAL_ANCHORS.has(lastAncestorLower)) {
     throw new Error(
-      `Coin ancestry did not reach ZORA token. Last ancestor: ${lastAncestor}. ` +
-        `Ancestry: ${ancestry.join(" → ")}`,
+      `Coin ancestry did not reach a known anchor (ZORA or USDC). ` +
+      `Last ancestor: ${lastAncestor}. Ancestry: ${ancestry.join(" → ")}`,
     );
   }
 
-  // Build buy path: [ETH, ZORA, ...parents_reversed, coin]
-  // ancestry is [coin, parent1, parent2, ..., ZORA]
-  // We need [ETH, ZORA, ..., parent2, parent1, coin]
-  const buyPath: Address[] = [NATIVE_ETH, ...ancestry.slice().reverse()];
-  // Pool params: [ETH_ZORA_HOP, ...hopParams_reversed]
-  // hopParams[0] = coin→parent1 pool, hopParams[1] = parent1→parent2 pool, etc.
-  // For buy direction: first hop is ETH→ZORA, then ZORA→parentN, ..., parent1→coin
+  // Build the ETH bridge hop(s) based on which anchor we reached
+  let ethBridgePath: Address[];
+  let ethBridgeParams: HopPoolParams[];
+
+  if (lastAncestorLower === ZORA_TOKEN.toLowerCase()) {
+    // Standard path: ETH → ZORA
+    ethBridgePath = [NATIVE_ETH, ZORA_TOKEN];
+    ethBridgeParams = [ETH_ZORA_HOP];
+  } else if (lastAncestorLower === USDC_BASE.toLowerCase()) {
+    // USDC-backed coin: ETH → USDC
+    ethBridgePath = [NATIVE_ETH, USDC_BASE];
+    ethBridgeParams = [ETH_USDC_HOP];
+  } else if (lastAncestorLower === WETH_BASE.toLowerCase()) {
+    // WETH-backed coin: ETH is WETH, no bridge needed — just start from native ETH.
+    // The coin pairs directly against WETH, so the path is [ETH(native), coin]
+    // with the coin's own pool params.
+    ethBridgePath = [NATIVE_ETH];
+    ethBridgeParams = [];
+  } else {
+    // Shouldn't reach here given the TERMINAL_ANCHORS check above
+    throw new Error(`Unhandled terminal anchor: ${lastAncestor}`);
+  }
+
+  // Build buy path: [ETH, anchor, ...parents_reversed, coin]
+  // ancestry is [coin, parent1, parent2, ..., anchor]
+  // We need [ETH, anchor, ..., parent2, parent1, coin]
+  const buyPath: Address[] = [...ethBridgePath, ...ancestry.slice(0, -1).reverse()];
   const buyPoolParams: HopPoolParams[] = [
-    ETH_ZORA_HOP,
+    ...ethBridgeParams,
     ...hopParams.slice().reverse(),
   ];
 
@@ -288,4 +339,4 @@ export async function getCoinBalance(
   })) as bigint;
 }
 
-export { NATIVE_ETH, ZORA_TOKEN, ETH_ZORA_HOP };
+export { NATIVE_ETH, ZORA_TOKEN, USDC_BASE, WETH_BASE, ETH_ZORA_HOP, ETH_USDC_HOP, TERMINAL_ANCHORS };

@@ -2,7 +2,7 @@ import pLimit from "p-limit";
 import { db } from "../db/index.js";
 import { swapFromSmartAccount } from "./cdp.js";
 import { recordTradePosition } from "./monitor.js";
-import { getWalletBudgets, MIN_BUY_BALANCE_WEI } from "./balance.js";
+import { getWalletBudgets } from "./balance.js";
 import type { StrategyMode, TradeRecord } from "../types.js";
 
 const NATIVE_ETH = "0x0000000000000000000000000000000000000000" as const;
@@ -241,7 +241,7 @@ export async function strategySwap(input: {
     const walletRows = input.walletIds.map((id) => {
       const w = db.getWalletById(id);
       if (!w) throw new Error(`Wallet ${id} not found`);
-      return { id: w.id, address: w.address as `0x${string}` };
+      return { id: w.id, address: w.address };
     });
 
     const budgets = await getWalletBudgets(walletRows);
@@ -286,7 +286,7 @@ export async function strategySwap(input: {
 
   if (input.mode === "sync") {
     return coordinatedSwap({
-      walletIds: input.walletIds,
+      walletIds: eligibleWalletIds,
       fromToken: input.fromToken,
       toToken: input.toToken,
       amountInWei: 0n, // ignored when amountsPerWallet provided
@@ -297,7 +297,7 @@ export async function strategySwap(input: {
     });
   }
 
-  const ordered = shuffle(input.walletIds);
+  const ordered = shuffle(eligibleWalletIds);
   // Re-shuffle amounts to match shuffled wallet order
   const shuffledAmounts = ordered.map((_, idx) => amounts[idx]!);
   const waveSize = Math.max(1, Math.min(10, input.waveSize ?? 3));
@@ -398,8 +398,8 @@ export function buildDripSchedule(params: {
  * Each wallet makes `intervals` sub-trades at randomized times within the duration.
  * Supports jiggle on sub-trade amounts.
  */
-/** Default gas reserve per wallet for sells (0.0005 ETH covers ~1-2 UserOps on Base). */
-export const DEFAULT_GAS_RESERVE_WEI = 500_000_000_000_000n; // 0.0005 ETH
+/** Gas reserve per wallet — disabled (paymaster covers gas). */
+export const DEFAULT_GAS_RESERVE_WEI = 0n;
 
 export async function dripSwap(input: {
   walletIds: number[];
@@ -413,7 +413,7 @@ export async function dripSwap(input: {
   jiggle?: boolean;
   jiggleFactor?: number;
   operationId?: number | null;
-  /** Per-wallet gas reserve subtracted from buy amount (default 0.0005 ETH). Set 0n to disable. */
+  /** Per-wallet gas reserve subtracted from buy amount (default 0, paymaster covers gas). */
   gasReservePerWallet?: bigint;
 }): Promise<TradeRecord[]> {
   const walletCount = input.walletIds.length;
@@ -432,9 +432,12 @@ export async function dripSwap(input: {
 
   if (gasReserve > 0n && effectiveTotal < input.totalAmountInWei) {
     const reservedEth = Number(totalGasReserve) / 1e18;
+    const perWalletReserveEth = Number(gasReserve) / 1e18;
     const effectiveEth = Number(effectiveTotal) / 1e18;
-    console.log(`  Gas reserve: ${reservedEth.toFixed(4)} ETH (${walletCount} × ${(Number(gasReserve) / 1e18).toFixed(4)})`);
-    console.log(`  Effective buy: ${effectiveEth.toFixed(4)} ETH`);
+    console.warn(
+      `Gas reserve: ${reservedEth.toFixed(4)} ETH (${walletCount} × ${perWalletReserveEth.toFixed(4)})`,
+    );
+    console.warn(`Effective buy: ${effectiveEth.toFixed(4)} ETH`);
   }
 
   // Distribute effective total across wallets (with outer jiggle)
