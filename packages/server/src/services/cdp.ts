@@ -68,6 +68,10 @@ let cdpClient: CdpClient | null = null;
 let mockCounter = 0;
 const localSmartAccountCache = new Map<string, ToCoinbaseSmartAccountReturnType>();
 
+type CdpOwnerAccount = Awaited<ReturnType<CdpClient["evm"]["getOrCreateAccount"]>>;
+type CdpSmartAccount = Awaited<ReturnType<CdpClient["evm"]["getOrCreateSmartAccount"]>>;
+type CdpUserOperationReceipt = Awaited<ReturnType<CdpSmartAccount["waitForUserOperation"]>>;
+
 export interface EvmAccountRef {
   address: `0x${string}`;
   name?: string;
@@ -252,7 +256,7 @@ async function submitUserOperationViaRouter(input: {
 
 async function waitForUserOperationWithBundlerFirst(input: {
   userOpHash: `0x${string}`;
-  waitWithCdp: () => Promise<any>;
+  waitWithCdp: () => Promise<CdpUserOperationReceipt>;
   context: string;
 }): Promise<{ status: string; txHash: `0x${string}` | null }> {
   try {
@@ -299,18 +303,7 @@ export async function getOrCreateOwnerAccount(): Promise<EvmAccountRef> {
   };
 }
 
-async function getOwnerAccountInternal(): Promise<any> {
-  if (isCdpMockMode()) {
-    return { address: mockAddress("owner", OWNER_ACCOUNT_NAME), name: OWNER_ACCOUNT_NAME };
-  }
-
-  if (getSignerBackend() === "local") {
-    return {
-      address: localAccountForName(OWNER_ACCOUNT_NAME).address,
-      name: OWNER_ACCOUNT_NAME,
-    };
-  }
-
+async function getCdpOwnerAccount(): Promise<CdpOwnerAccount> {
   return getCdpClient().evm.getOrCreateAccount({ name: OWNER_ACCOUNT_NAME });
 }
 
@@ -339,8 +332,8 @@ export async function createSmartAccount(
     };
   }
 
-  const ownerAccount = await getOwnerAccountInternal();
-  const smartAccount = await getCdpClient().evm.createSmartAccount({
+  const ownerAccount = await getCdpOwnerAccount();
+  const smartAccount: CdpSmartAccount = await getCdpClient().evm.createSmartAccount({
     owner: ownerAccount,
     name,
   });
@@ -383,8 +376,8 @@ export async function getOrCreateMasterSmartAccount(): Promise<{
     };
   }
 
-  const ownerAccount = await getOwnerAccountInternal();
-  const smartAccount = await getCdpClient().evm.getOrCreateSmartAccount({
+  const ownerAccount = await getCdpOwnerAccount();
+  const smartAccount: CdpSmartAccount = await getCdpClient().evm.getOrCreateSmartAccount({
     name: MASTER_SMART_ACCOUNT_NAME,
     owner: ownerAccount,
   });
@@ -426,8 +419,8 @@ export async function getOrCreateSmartAccountByName(
     };
   }
 
-  const ownerAccount = await getOwnerAccountInternal();
-  const smartAccount = await getCdpClient().evm.getOrCreateSmartAccount({
+  const ownerAccount = await getCdpOwnerAccount();
+  const smartAccount: CdpSmartAccount = await getCdpClient().evm.getOrCreateSmartAccount({
     name,
     owner: ownerAccount,
   });
@@ -511,8 +504,8 @@ export async function transferFromSmartAccount(input: {
     });
   }
 
-  const owner = await getOwnerAccountInternal();
-  const smartAccount = await getCdpClient().evm.getOrCreateSmartAccount({
+  const owner = await getCdpOwnerAccount();
+  const smartAccount: CdpSmartAccount = await getCdpClient().evm.getOrCreateSmartAccount({
     name: input.smartAccountName,
     owner,
   });
@@ -789,8 +782,8 @@ export async function swapFromSmartAccount(input: {
     return { ...opResult, amountOut: quotedAmountOut.toString() };
   }
 
-  const owner = await getOwnerAccountInternal();
-  const smartAccount = await getCdpClient().evm.getOrCreateSmartAccount({
+  const owner = await getCdpOwnerAccount();
+  const smartAccount: CdpSmartAccount = await getCdpClient().evm.getOrCreateSmartAccount({
     name: input.smartAccountName,
     owner,
   });
@@ -845,8 +838,8 @@ export async function sendUserOperationFromSmartAccount(input: {
     });
   }
 
-  const owner = await getOwnerAccountInternal();
-  const smartAccount = await getCdpClient().evm.getOrCreateSmartAccount({
+  const owner = await getCdpOwnerAccount();
+  const smartAccount: CdpSmartAccount = await getCdpClient().evm.getOrCreateSmartAccount({
     name: input.smartAccountName,
     owner,
   });
