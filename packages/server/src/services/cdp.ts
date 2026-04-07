@@ -71,6 +71,18 @@ const localSmartAccountCache = new Map<string, ToCoinbaseSmartAccountReturnType>
 type CdpOwnerAccount = Awaited<ReturnType<CdpClient["evm"]["getOrCreateAccount"]>>;
 type CdpSmartAccount = Awaited<ReturnType<CdpClient["evm"]["getOrCreateSmartAccount"]>>;
 type CdpUserOperationReceipt = Awaited<ReturnType<CdpSmartAccount["waitForUserOperation"]>>;
+type BundlerExecutionClient = NonNullable<Parameters<typeof createBundlerClient>[0]["client"]>;
+
+function asBundlerExecutionClient(client: BundlerExecutionClient): BundlerExecutionClient {
+  return client;
+}
+
+function toCoinRouteClient(client: ReturnType<typeof localPublicClient>): CoinRouteClient {
+  return {
+    readContract: (args) => client.readContract(args),
+    getStorageAt: (args) => client.getStorageAt(args),
+  };
+}
 
 export interface EvmAccountRef {
   address: `0x${string}`;
@@ -222,11 +234,10 @@ async function submitUserOperationViaRouter(input: {
   try {
     const account = await getLocalSmartAccount(input.smartAccountName);
     const publicClient = localPublicClient();
-    const bundlerCompatClient = publicClient as unknown as NonNullable<Parameters<typeof createBundlerClient>[0]["client"]>;
     const bundlerClient = createSponsoredBundlerClient({
       account,
       chain: getChainCfg().chain,
-      client: bundlerCompatClient,
+      client: asBundlerExecutionClient(publicClient),
     });
 
     const userOpHash = await sendUserOperation(bundlerClient, {
@@ -571,7 +582,7 @@ export async function swapFromSmartAccount(input: {
 
     try {
       const coinRoute = await resolveCoinRoute({
-        client: publicClient as unknown as CoinRouteClient,
+        client: toCoinRouteClient(publicClient),
         coinAddress,
       });
       routePath = isSell ? coinRoute.sellPath : coinRoute.buyPath;
