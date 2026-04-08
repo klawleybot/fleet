@@ -10,12 +10,7 @@
  * key is fully removed.
  */
 
-import {
-  type Address,
-  encodeFunctionData,
-  decodeFunctionResult,
-  getAddress,
-} from "viem";
+import { type Address, encodeFunctionData, getAddress } from "viem";
 import type { PublicClient as ReadPublicClient } from "viem";
 import type { PrivateKeyAccount } from "viem/accounts";
 import {
@@ -83,39 +78,36 @@ export async function isOwnerAddress(
   walletAddress: Address,
   owner: Address,
 ): Promise<boolean> {
-  const data = await client.readContract({
+  return client.readContract({
     address: walletAddress,
     abi: multiOwnableAbi,
     functionName: "isOwnerAddress",
     args: [owner],
   });
-  return data as boolean;
 }
 
 export async function getNextOwnerIndex(
   client: ReadPublicClient,
   walletAddress: Address,
 ): Promise<bigint> {
-  const data = await client.readContract({
+  return client.readContract({
     address: walletAddress,
     abi: multiOwnableAbi,
     functionName: "nextOwnerIndex",
     args: [],
   });
-  return data as bigint;
 }
 
 export async function getOwnerCount(
   client: ReadPublicClient,
   walletAddress: Address,
 ): Promise<bigint> {
-  const data = await client.readContract({
+  return client.readContract({
     address: walletAddress,
     abi: multiOwnableAbi,
     functionName: "ownerCount",
     args: [],
   });
-  return data as bigint;
 }
 
 export async function getOwnerAtIndex(
@@ -255,7 +247,7 @@ export async function migrateSmartWalletOwner(
     args: [newOwnerAccount.address],
   });
 
-  const bundlerCurrent = createBundler(smartAccountAsCurrentOwner) as unknown as Parameters<typeof sendUserOperation>[0];
+  const bundlerCurrent = createBundler(smartAccountAsCurrentOwner);
   const addOpHash = await sendUserOperation(bundlerCurrent, {
     account: smartAccountAsCurrentOwner,
     calls: [{ to: walletAddress, data: addOwnerData, value: 0n }],
@@ -293,7 +285,7 @@ export async function migrateSmartWalletOwner(
     args: [oldOwnerIndex, oldOwnerBytes],
   });
 
-  const bundlerNew = createBundler(smartAccountAsNewOwner) as unknown as Parameters<typeof sendUserOperation>[0];
+  const bundlerNew = createBundler(smartAccountAsNewOwner);
   const removeOpHash = await sendUserOperation(bundlerNew, {
     account: smartAccountAsNewOwner,
     calls: [{ to: walletAddress, data: removeOwnerData, value: 0n }],
@@ -341,5 +333,5 @@ export async function migrateSmartWalletOwner(
 
 /** ABI-encode an address as 32 bytes (matching MultiOwnable's storage format) */
 function encodedAddress(addr: Address): `0x${string}` {
-  return `0x${addr.slice(2).toLowerCase().padStart(64, "0")}` as `0x${string}`;
+  return `0x${addr.slice(2).toLowerCase().padStart(64, "0")}`;
 }
