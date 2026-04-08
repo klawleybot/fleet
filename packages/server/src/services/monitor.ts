@@ -4,11 +4,10 @@
  * Aggregates position data, queries on-chain balances, and computes P&L
  * for fleet clusters.
  */
-import { type Address, type Hex, createPublicClient, http } from "viem";
+import { type Address, createPublicClient, http } from "viem";
 import { db } from "../db/index.js";
 import type { PositionRecord } from "../types.js";
 import { getChainConfig } from "./network.js";
-import { quoteExactInputSingle } from "./v4Quoter.js";
 import { quoteCoinToEth } from "./quoter.js";
 
 // Minimal ABI for balanceOf
@@ -169,7 +168,7 @@ export async function getFleetStatus(params: {
     client = createPublicClient({
       chain: chainCfg.chain,
       transport: http(chainCfg.rpcUrl),
-    }) as unknown as BalanceClient;
+    });
   }
 
   // Collect on-chain balances first
@@ -195,9 +194,9 @@ export async function getFleetStatus(params: {
   }
 
   // Aggregate holdings per coin for efficient quoting
-  const coinHoldings = new Map<string, bigint>();
+  const coinHoldings = new Map<Address, bigint>();
   for (const { pos, onChainBalance } of positionsWithBalances) {
-    const key = pos.coinAddress.toLowerCase();
+    const key = pos.coinAddress;
     const holdings = onChainBalance ?? BigInt(pos.holdingsRaw);
     if (holdings > 0n) {
       coinHoldings.set(key, (coinHoldings.get(key) ?? 0n) + holdings);
@@ -205,13 +204,13 @@ export async function getFleetStatus(params: {
   }
 
   // Quote each coin's total holdings → ETH value
-  const coinEthValues = new Map<string, { totalHoldings: bigint; totalEthValue: bigint }>();
+  const coinEthValues = new Map<Address, { totalHoldings: bigint; totalEthValue: bigint }>();
   if (refreshBalances) {
     for (const [coinAddr, totalHoldings] of coinHoldings) {
       if (totalHoldings <= 0n) continue;
       try {
         const ethValue = await quoteCoinToEth({
-          coinAddress: coinAddr as Address,
+          coinAddress: coinAddr,
           amount: totalHoldings,
         });
         coinEthValues.set(coinAddr, { totalHoldings, totalEthValue: ethValue });
@@ -224,7 +223,7 @@ export async function getFleetStatus(params: {
   // Enrich positions with proportional unrealized P&L
   const enriched: WalletPosition[] = [];
   for (const { pos, wallet, onChainBalance } of positionsWithBalances) {
-    const key = pos.coinAddress.toLowerCase();
+    const key = pos.coinAddress;
     const holdings = onChainBalance ?? BigInt(pos.holdingsRaw);
     let currentValueWei: bigint | null = null;
 

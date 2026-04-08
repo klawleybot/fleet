@@ -12,9 +12,10 @@ import {
   type Address,
   type Hex,
   type Log,
-  type PublicClient,
   createPublicClient,
   http,
+  isAddress,
+  isHex,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base } from "viem/chains";
@@ -56,10 +57,72 @@ export interface CreatorCoinDeployResult {
 
 const ZORA_API = "https://api-sdk.zora.engineering";
 
+interface ZoraCreateCall {
+  to: Address;
+  value: string;
+  data: Hex;
+}
+
 interface ZoraCreateResponse {
-  calls: Array<{ to: string; value: string; data: string }>;
-  predictedCoinAddress: string;
+  calls: ZoraCreateCall[];
+  predictedCoinAddress: Address;
   usedSmartWalletRouting: boolean;
+}
+
+function parseZoraCreateCall(value: unknown, index: number): ZoraCreateCall {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`Zora API returned invalid call at index ${index}`);
+  }
+
+  const { to, value: callValue, data } = value as {
+    to?: unknown;
+    value?: unknown;
+    data?: unknown;
+  };
+
+  if (typeof to !== "string" || !isAddress(to)) {
+    throw new Error(`Zora API returned invalid call target at index ${index}`);
+  }
+  if (typeof callValue !== "string") {
+    throw new Error(`Zora API returned invalid call value at index ${index}`);
+  }
+  if (typeof data !== "string" || !isHex(data)) {
+    throw new Error(`Zora API returned invalid call data at index ${index}`);
+  }
+
+  return { to, value: callValue, data };
+}
+
+function parseZoraCreateResponse(json: unknown): ZoraCreateResponse {
+  if (typeof json !== "object" || json === null) {
+    throw new Error("Zora API returned a non-object response");
+  }
+
+  const {
+    calls,
+    predictedCoinAddress,
+    usedSmartWalletRouting,
+  } = json as {
+    calls?: unknown;
+    predictedCoinAddress?: unknown;
+    usedSmartWalletRouting?: unknown;
+  };
+
+  if (!Array.isArray(calls)) {
+    throw new Error("Zora API returned calls in an invalid format");
+  }
+  if (typeof predictedCoinAddress !== "string" || !isAddress(predictedCoinAddress)) {
+    throw new Error("Zora API returned an invalid predicted coin address");
+  }
+  if (typeof usedSmartWalletRouting !== "boolean") {
+    throw new Error("Zora API returned an invalid smart wallet routing flag");
+  }
+
+  return {
+    calls: calls.map((call, index) => parseZoraCreateCall(call, index)),
+    predictedCoinAddress,
+    usedSmartWalletRouting,
+  };
 }
 
 export async function getCreatorCoinCalldata(params: {
@@ -94,8 +157,8 @@ export async function getCreatorCoinCalldata(params: {
     throw new Error(`Zora API error (${res.status}): ${await res.text()}`);
   }
 
-  const data = (await res.json()) as ZoraCreateResponse;
-  if (!data.calls?.length) throw new Error("Zora API returned no deployment calls");
+  const data = parseZoraCreateResponse(await res.json());
+  if (data.calls.length === 0) throw new Error("Zora API returned no deployment calls");
   return data;
 }
 
@@ -154,19 +217,18 @@ export async function deployCreatorCoin(
     version: "1.1",
   });
 
-  const bundlerCompatClient = publicClient as unknown as NonNullable<Parameters<typeof import("viem/account-abstraction").createBundlerClient>[0]["client"]>;
   const bundlerClient = createSponsoredBundlerClient({
     account: smartAccount,
     chain: base,
-    client: bundlerCompatClient,
+    client: publicClient,
   });
 
   logger.info("Sending creator coin deployment as sponsored UserOp");
 
   const txHash = await bundlerClient.sendUserOperation({
     calls: [{
-      to: call.to as Address,
-      data: call.data as Hex,
+      to: call.to,
+      data: call.data,
       value: BigInt(call.value),
     }],
   });
@@ -190,7 +252,7 @@ export async function deployCreatorCoin(
 
   return {
     coinAddress,
-    predictedAddress: createResponse.predictedCoinAddress as Address,
+    predictedAddress: createResponse.predictedCoinAddress,
     txHash: receipt.receipt.transactionHash,
   };
 }

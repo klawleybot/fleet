@@ -9,7 +9,7 @@ import { base } from "viem/chains";
 import { db } from "../db/index.js";
 import type { SwingConfigRecord } from "../types.js";
 import { getFleetByName } from "./fleet.js";
-import { getCoinBalance, type CoinRouteClient } from "./coinRoute.js";
+import { getCoinBalance } from "./coinRoute.js";
 import { quoteCoinToEth } from "./quoter.js";
 import { swapFromSmartAccount } from "./cdp.js";
 import { recordTradePosition } from "./monitor.js";
@@ -253,7 +253,7 @@ export async function executeSwingSell(config: SwingConfigRecord): Promise<Swing
   const fleet = getFleetByName(config.fleetName);
   if (!fleet) throw new Error(`Fleet "${config.fleetName}" not found`);
 
-  const coinAddr = config.coinAddress as Address;
+  const coinAddr = config.coinAddress;
   const cfg = getChainConfig();
   const client = createPublicClient({ chain: base, transport: http(cfg.rpcUrl) });
 
@@ -264,9 +264,9 @@ export async function executeSwingSell(config: SwingConfigRecord): Promise<Swing
 
   for (const wallet of fleet.wallets) {
     const balance = await getCoinBalance(
-      client as unknown as CoinRouteClient,
+      client,
       coinAddr,
-      wallet.address as Address,
+      wallet.address,
     );
 
     if (balance === 0n) {

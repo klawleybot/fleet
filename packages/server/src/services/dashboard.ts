@@ -2,10 +2,9 @@
  * Dashboard Service — Global and per-fleet P&L + available ETH
  */
 import { type Address, createPublicClient, formatEther, http } from "viem";
-import { db } from "../db/index.js";
 import { getChainConfig } from "./network.js";
 import { getFleetStatus, type FleetSummary } from "./monitor.js";
-import { listFleets, type FleetInfo } from "./fleet.js";
+import { listFleets } from "./fleet.js";
 import { ensureMasterWallet } from "./wallet.js";
 
 // ---------------------------------------------------------------------------
@@ -66,10 +65,10 @@ export async function getFleetDashboard(fleetName: string): Promise<FleetDashboa
   const walletBalances: WalletBalance[] = [];
   let totalEth = 0n;
   for (const w of fleet.wallets) {
-    const bal = await client.getBalance({ address: w.address as Address });
+    const bal = await client.getBalance({ address: w.address });
     walletBalances.push({
       name: w.name,
-      address: w.address as Address,
+      address: w.address,
       balanceWei: bal.toString(),
     });
     totalEth += bal;
@@ -99,10 +98,10 @@ export async function getGlobalDashboard(): Promise<GlobalDashboard> {
 
   // Master wallet balance
   const master = await ensureMasterWallet();
-  const masterBal = await client.getBalance({ address: master.address as Address });
+  const masterBal = await client.getBalance({ address: master.address });
   const masterWallet: WalletBalance = {
     name: "master",
-    address: master.address as Address,
+    address: master.address,
     balanceWei: masterBal.toString(),
   };
 

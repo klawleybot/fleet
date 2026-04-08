@@ -192,7 +192,7 @@ export async function runAutonomyTick(): Promise<TickResult> {
               const minSellValueWei = BigInt(process.env.MIN_SELL_VALUE_WEI ?? "500000000000000"); // 0.0005 ETH default
               try {
                 const { quoteCoinToEth } = await import("./quoter.js");
-                const estValue = await quoteCoinToEth({ coinAddress: signal.coinAddress as `0x${string}`, amount: totalHoldings });
+                const estValue = await quoteCoinToEth({ coinAddress: signal.coinAddress, amount: totalHoldings });
                 if (estValue < minSellValueWei) {
                   result.skipped.push({
                     reason: `cluster ${clusterId} ${signal.coinAddress.slice(0,10)} holdings worth ~${(Number(estValue) / 1e18).toFixed(6)} ETH — below min sell value ${(Number(minSellValueWei) / 1e18).toFixed(4)} ETH`,
@@ -249,7 +249,7 @@ export async function runAutonomyTick(): Promise<TickResult> {
           // Dip buys need budget — check cluster wallets (skip in mock mode)
           if (process.env.CDP_MOCK_MODE !== "1") {
             const dipBudgets = await getWalletBudgets(
-              clusterWallets.map((w) => ({ id: w.id, address: w.address as `0x${string}` })),
+              clusterWallets.map((w) => ({ id: w.id, address: w.address })),
             );
             const dipPerWallet = BigInt(config.totalAmountWei) / BigInt(clusterWallets.length || 1);
             const dipReady = dipBudgets.wallets.filter((w) => w.balance >= dipPerWallet).length;

@@ -14,7 +14,7 @@
  */
 import { createPublicClient, http, formatEther, type Address } from "viem";
 import { db } from "../db/index.js";
-import type { ClusterRecord, WalletRecord } from "../types.js";
+import type { WalletRecord } from "../types.js";
 import { transferFromSmartAccount } from "./cdp.js";
 import { createFleetWallets, ensureMasterWallet } from "./wallet.js";
 import {
@@ -28,8 +28,8 @@ import { getChainConfig } from "./network.js";
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Conservative per-transfer gas estimate in wei (UserOp overhead on L2). */
-const GAS_PER_TRANSFER_WEI = 300_000_000_000_000n; // 0.0003 ETH
+/** Per-transfer gas estimate — set to 0 since paymaster sponsors all UserOps. */
+const GAS_PER_TRANSFER_WEI = 0n;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -155,7 +155,7 @@ export async function createFleet(params: {
       const client = createPublicClient({ chain: chainCfg.chain, transport: http(chainCfg.rpcUrl) });
       let totalSourceBalance = 0n;
       for (const w of sourceFleet.wallets) {
-        totalSourceBalance += await client.getBalance({ address: w.address as Address });
+        totalSourceBalance += await client.getBalance({ address: w.address });
       }
       const totalRequired = perWalletWei * BigInt(walletCount) + GAS_PER_TRANSFER_WEI * BigInt(walletCount);
       if (totalSourceBalance < totalRequired) {
@@ -170,7 +170,7 @@ export async function createFleet(params: {
     } else {
       // Funding from master SA
       const master = await ensureMasterWallet();
-      fundingAddress = master.address as Address;
+      fundingAddress = master.address;
       const shortfall = await checkFundingBalance({
         fundingAddress,
         perWalletWei,
@@ -216,7 +216,7 @@ export async function createFleet(params: {
       const expectedMin = BigInt(fundAmountWei) / 2n;
       const unfunded: string[] = [];
       for (const w of wallets) {
-        const bal = await client.getBalance({ address: w.address as Address });
+        const bal = await client.getBalance({ address: w.address });
         if (bal < expectedMin) {
           unfunded.push(`${w.name} (${w.address}): ${formatEther(bal)} ETH`);
         }
@@ -310,7 +310,7 @@ export async function sweepFleet(params: {
   sourceFleetName: string;
   targetAddress?: Address;
   targetFleetName?: string;
-  /** Wei to reserve in each source wallet for gas (default: 0.0005 ETH) */
+  /** Wei to reserve in each source wallet for gas (default: 0, paymaster covers gas) */
   reserveWei?: bigint;
 }): Promise<SweepResult> {
   const source = getFleetByName(params.sourceFleetName);
@@ -326,16 +326,16 @@ export async function sweepFleet(params: {
     if (!target) throw new Error(`Target fleet "${params.targetFleetName}" not found`);
     if (target.wallets.length === 0) throw new Error(`Target fleet "${params.targetFleetName}" has no wallets`);
     if (source.clusterId === target.clusterId) throw new Error("Source and target fleet cannot be the same");
-    targetAddress = target.wallets[0]!.address as Address;
+    targetAddress = target.wallets[0]!.address;
   } else if (params.targetAddress) {
     targetAddress = params.targetAddress;
   } else {
     // Default: sweep back to master SA
     const master = await ensureMasterWallet();
-    targetAddress = master.address as Address;
+    targetAddress = master.address;
   }
 
-  const reserveWei = params.reserveWei ?? 500_000_000_000_000n; // 0.0005 ETH default
+  const reserveWei = params.reserveWei ?? 0n; // paymaster covers gas, no reserve needed
 
   // Query balances
   const chainCfg = getChainConfig();
@@ -346,13 +346,13 @@ export async function sweepFleet(params: {
   let totalFailed = 0n;
 
   for (const wallet of source.wallets) {
-    const balance = await client.getBalance({ address: wallet.address as Address });
+    const balance = await client.getBalance({ address: wallet.address });
     const sendable = balance > reserveWei ? balance - reserveWei : 0n;
 
     if (sendable <= 0n) {
       transfers.push({
         wallet: wallet.name,
-        address: wallet.address as Address,
+        address: wallet.address,
         balanceBefore: balance,
         amountSent: 0n,
         txHash: null,
@@ -369,7 +369,7 @@ export async function sweepFleet(params: {
       });
       transfers.push({
         wallet: wallet.name,
-        address: wallet.address as Address,
+        address: wallet.address,
         balanceBefore: balance,
         amountSent: sendable,
         txHash: result.txHash,
@@ -383,7 +383,7 @@ export async function sweepFleet(params: {
     } catch (err) {
       transfers.push({
         wallet: wallet.name,
-        address: wallet.address as Address,
+        address: wallet.address,
         balanceBefore: balance,
         amountSent: 0n,
         txHash: null,
