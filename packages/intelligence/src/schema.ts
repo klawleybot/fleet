@@ -131,6 +131,25 @@ CREATE TABLE IF NOT EXISTS sync_runs (
   count INTEGER NOT NULL,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS bad_actors (
+  address TEXT PRIMARY KEY,
+  label TEXT,
+  reason TEXT,
+  severity TEXT NOT NULL DEFAULT 'warning',
+  added_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS bad_actor_holdings_cache (
+  actor_address TEXT NOT NULL,
+  coin_address TEXT NOT NULL,
+  holding_pct REAL NOT NULL DEFAULT 0,
+  estimated_slippage_pct REAL NOT NULL DEFAULT 0,
+  estimated_value_usd REAL NOT NULL DEFAULT 0,
+  checked_at TEXT NOT NULL,
+  PRIMARY KEY (actor_address, coin_address)
+);
 `);
 
   // Migrations — add columns that may be missing on older DBs

@@ -79,18 +79,10 @@ export function runMigrations(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_operations_cluster ON operations(cluster_id);
   `);
 
-  // --- Migration v2: monitoring columns + positions table ---
-  // Add amount_out and operation_id to trades if not present
-  const tradeColumns = db
-    .prepare("PRAGMA table_info(trades)")
-    .all() as Array<{ name: string }>;
+  const tradeColumns = db.prepare("PRAGMA table_info(trades)").all() as Array<{ name: string }>;
   const tradeColNames = new Set(tradeColumns.map((c) => c.name));
-  if (!tradeColNames.has("amount_out")) {
-    db.exec("ALTER TABLE trades ADD COLUMN amount_out TEXT");
-  }
-  if (!tradeColNames.has("operation_id")) {
-    db.exec("ALTER TABLE trades ADD COLUMN operation_id INTEGER REFERENCES operations(id)");
-  }
+  if (!tradeColNames.has("amount_out")) db.exec("ALTER TABLE trades ADD COLUMN amount_out TEXT");
+  if (!tradeColNames.has("operation_id")) db.exec("ALTER TABLE trades ADD COLUMN operation_id INTEGER REFERENCES operations(id)");
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS swing_configs (
@@ -108,9 +100,7 @@ export function runMigrations(db: Database): void {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(fleet_name, coin_address)
     );
-  `);
 
-  db.exec(`
     CREATE TABLE IF NOT EXISTS positions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       wallet_id INTEGER NOT NULL,
@@ -130,5 +120,116 @@ export function runMigrations(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_positions_coin ON positions(coin_address);
     CREATE INDEX IF NOT EXISTS idx_trades_operation ON trades(operation_id);
   `);
-}
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS campaigns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      coin_address TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('planned', 'active', 'paused', 'settled', 'cancelled')),
+      phase TEXT NOT NULL CHECK (phase IN ('launch', 'mid', 'late', 'settlement')),
+      deploy_tx_hash TEXT,
+      deploy_source TEXT,
+      metadata_uri TEXT,
+      target_allocation_bps INTEGER NOT NULL DEFAULT 100,
+      self_snipe_eth_wei TEXT NOT NULL DEFAULT '0',
+      total_buy_eth_wei TEXT NOT NULL DEFAULT '0',
+      total_sell_eth_wei TEXT NOT NULL DEFAULT '0',
+      total_burned_tokens TEXT NOT NULL DEFAULT '0',
+      pnl_eth_wei TEXT NOT NULL DEFAULT '0',
+      holders INTEGER NOT NULL DEFAULT 0,
+      external_volume_24h_usd REAL NOT NULL DEFAULT 0,
+      external_swap_count_24h INTEGER NOT NULL DEFAULT 0,
+      last_metrics_at TEXT,
+      last_execution_at TEXT,
+      started_at TEXT NOT NULL,
+      ends_at TEXT NOT NULL,
+      settlement_mode TEXT CHECK (settlement_mode IN ('recover_1pct', 'retain_1pct')),
+      settlement_at TEXT,
+      settlement_notes TEXT,
+      retained_allocation_bps INTEGER NOT NULL DEFAULT 0,
+      recover_allocation_bps INTEGER NOT NULL DEFAULT 0,
+      treasury_retained_eth_wei TEXT NOT NULL DEFAULT '0',
+      burn_gain_eth_wei TEXT NOT NULL DEFAULT '0',
+      dry_run INTEGER NOT NULL DEFAULT 0,
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS campaign_metrics_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id INTEGER NOT NULL,
+      holders INTEGER NOT NULL DEFAULT 0,
+      volume_24h_usd REAL NOT NULL DEFAULT 0,
+      swaps_24h INTEGER NOT NULL DEFAULT 0,
+      net_flow_24h_usd REAL NOT NULL DEFAULT 0,
+      momentum_score REAL NOT NULL DEFAULT 0,
+      external_wallet_buy_count_24h INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(campaign_id) REFERENCES campaigns(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS campaign_plans (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id INTEGER NOT NULL,
+      phase TEXT NOT NULL CHECK (phase IN ('launch', 'mid', 'late', 'settlement')),
+      rationale TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('draft', 'approved', 'superseded', 'completed')),
+      planned_for TEXT NOT NULL,
+      max_concurrent_campaigns INTEGER NOT NULL DEFAULT 3,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(campaign_id) REFERENCES campaigns(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS campaign_plan_steps (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id INTEGER NOT NULL,
+      plan_id INTEGER NOT NULL,
+      side TEXT NOT NULL CHECK (side IN ('buy', 'sell', 'burn')),
+      sequence_no INTEGER NOT NULL,
+      scheduled_for TEXT NOT NULL,
+      amount_wei TEXT NOT NULL,
+      slippage_bps INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'ready', 'executing', 'confirmed', 'failed', 'cancelled')),
+      rationale TEXT NOT NULL,
+      started_at TEXT,
+      completed_at TEXT,
+      execution_id INTEGER,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(campaign_id) REFERENCES campaigns(id),
+      FOREIGN KEY(plan_id) REFERENCES campaign_plans(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS campaign_executions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id INTEGER NOT NULL,
+      plan_id INTEGER,
+      step_id INTEGER,
+      side TEXT NOT NULL CHECK (side IN ('buy', 'sell', 'burn')),
+      status TEXT NOT NULL CHECK (status IN ('simulated', 'confirmed', 'failed', 'skipped')),
+      amount_in_wei TEXT NOT NULL,
+      amount_out_raw TEXT,
+      tx_hash TEXT,
+      user_op_hash TEXT,
+      summary TEXT,
+      simulation_only INTEGER NOT NULL DEFAULT 0,
+      reason TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      completed_at TEXT,
+      FOREIGN KEY(campaign_id) REFERENCES campaigns(id),
+      FOREIGN KEY(plan_id) REFERENCES campaign_plans(id),
+      FOREIGN KEY(step_id) REFERENCES campaign_plan_steps(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns(status);
+    CREATE INDEX IF NOT EXISTS idx_campaigns_phase ON campaigns(phase);
+    CREATE INDEX IF NOT EXISTS idx_campaigns_started_at ON campaigns(started_at);
+    CREATE INDEX IF NOT EXISTS idx_campaign_metrics_campaign_created ON campaign_metrics_snapshots(campaign_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_campaign_plans_campaign ON campaign_plans(campaign_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_campaign_plan_steps_due ON campaign_plan_steps(status, scheduled_for);
+    CREATE INDEX IF NOT EXISTS idx_campaign_plan_steps_campaign ON campaign_plan_steps(campaign_id, status, scheduled_for);
+    CREATE INDEX IF NOT EXISTS idx_campaign_executions_campaign ON campaign_executions(campaign_id, created_at DESC);
+  `);
+}

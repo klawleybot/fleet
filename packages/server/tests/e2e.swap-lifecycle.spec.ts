@@ -25,7 +25,6 @@ import {
   launchCoin,
   zoraFactoryAbi,
   BLDR_TOKEN_SEPOLIA,
-  ZORA_FACTORY_ADDRESSES,
 } from "../src/services/coinLauncher.js";
 
 // ---------------------------------------------------------------------------

@@ -56,11 +56,15 @@ export function selectDiverseAlerts(
     const recentCount = Number(meta.recentCount ?? 0);
     const mcap = Number(meta.marketCap ?? 0);
     const cooldownMin = minsSince(meta.lastSentAt ?? null, nowMs);
+    // Cooldown applies to ALL severities — high/critical coins were spamming
+    // every dispatch cycle because they bypassed cooldown. Only truly novel
+    // first-time alerts (recentCount === 0) skip the cooldown gate.
+    const isFirstAlert = recentCount === 0;
     const cooldownBlocked = Boolean(
       entity &&
       options.perCoinCooldownMin > 0 &&
       cooldownMin < options.perCoinCooldownMin &&
-      sev < 3,
+      !isFirstAlert,
     );
 
     let score = sev * 1000 + r.id;

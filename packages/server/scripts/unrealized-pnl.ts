@@ -4,14 +4,15 @@ import { getWalletBudgets } from "../src/services/balance.js";
 
 // Gather positions by coin, tracking which wallet IDs are involved
 const positions = db.listAllPositions();
-const byCoin: Record<string, { holdings: bigint; costWei: bigint; walletIds: Set<number> }> = {};
+const byCoin: Record<string, { holdings: bigint; grossCostWei: bigint; receivedWei: bigint; walletIds: Set<number> }> = {};
 
 for (const p of positions) {
   const h = BigInt(p.holdingsRaw);
   if (h <= 0n) continue;
-  if (!byCoin[p.coinAddress]) byCoin[p.coinAddress] = { holdings: 0n, costWei: 0n, walletIds: new Set() };
+  if (!byCoin[p.coinAddress]) byCoin[p.coinAddress] = { holdings: 0n, grossCostWei: 0n, receivedWei: 0n, walletIds: new Set() };
   byCoin[p.coinAddress].holdings += h;
-  byCoin[p.coinAddress].costWei += BigInt(p.totalCostWei);
+  byCoin[p.coinAddress].grossCostWei += BigInt(p.totalCostWei);
+  byCoin[p.coinAddress].receivedWei += BigInt(p.totalReceivedWei);
   byCoin[p.coinAddress].walletIds.add(p.walletId);
 }
 
@@ -34,14 +35,17 @@ for (const w of budgets.wallets) {
   balanceByWalletId.set(w.walletId, w.balance);
 }
 
-let totalCost = 0;
+let totalGrossCost = 0;
+let totalReceived = 0;
 let totalTokenValue = 0;
 let totalWalletEth = 0;
 
 for (const [coin, data] of Object.entries(byCoin)) {
-  const costEth = Number(data.costWei) / 1e18;
+  const grossCostEth = Number(data.grossCostWei) / 1e18;
+  const receivedEth = Number(data.receivedWei) / 1e18;
+  const netCostEth = grossCostEth - receivedEth;  // actual capital at risk
 
-  // Sum ETH sitting in these wallets (recovered from sells)
+  // Sum ETH sitting in these wallets (unsold ETH from partial sells, etc.)
   let walletEthWei = 0n;
   for (const wid of data.walletIds) {
     walletEthWei += balanceByWalletId.get(wid) ?? 0n;
@@ -52,25 +56,30 @@ for (const [coin, data] of Object.entries(byCoin)) {
     const ethValue = await quoteCoinToEth({ coinAddress: coin as `0x${string}`, amount: data.holdings });
     const tokenValueEth = Number(ethValue) / 1e18;
     const totalValueEth = tokenValueEth + walletEth;
-    const pnl = totalValueEth - costEth;
-    const pnlPct = costEth > 0 ? (pnl / costEth * 100) : 0;
-    totalCost += costEth;
+    const pnl = totalValueEth - netCostEth;
+    const pnlPct = netCostEth > 0 ? (pnl / netCostEth * 100) : 0;
+    totalGrossCost += grossCostEth;
+    totalReceived += receivedEth;
     totalTokenValue += tokenValueEth;
     totalWalletEth += walletEth;
-    console.log(`${coin.slice(0, 10)}… | ${data.walletIds.size} wallets | cost: ${costEth.toFixed(6)} ETH | tokens: ${tokenValueEth.toFixed(6)} ETH | recovered: ${walletEth.toFixed(6)} ETH | total value: ${totalValueEth.toFixed(6)} ETH | PnL: ${pnl >= 0 ? "+" : ""}${pnl.toFixed(6)} ETH (${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(1)}%)`);
+    console.log(`${coin.slice(0, 10)}… | ${data.walletIds.size} wallets | net cost: ${netCostEth.toFixed(6)} ETH (${grossCostEth.toFixed(6)} in - ${receivedEth.toFixed(6)} sold) | tokens: ${tokenValueEth.toFixed(6)} ETH | wallet: ${walletEth.toFixed(6)} ETH | PnL: ${pnl >= 0 ? "+" : ""}${pnl.toFixed(6)} ETH (${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(1)}%)`);
   } catch (e: any) {
-    totalCost += costEth;
+    totalGrossCost += grossCostEth;
+    totalReceived += receivedEth;
     totalWalletEth += walletEth;
-    console.log(`${coin.slice(0, 10)}… | ${data.walletIds.size} wallets | cost: ${costEth.toFixed(6)} ETH | recovered: ${walletEth.toFixed(6)} ETH | ⚠️  quote failed: ${e.message?.slice(0, 60)}`);
+    console.log(`${coin.slice(0, 10)}… | ${data.walletIds.size} wallets | net cost: ${netCostEth.toFixed(6)} ETH (${grossCostEth.toFixed(6)} in - ${receivedEth.toFixed(6)} sold) | wallet: ${walletEth.toFixed(6)} ETH | ⚠️  quote failed: ${e.message?.slice(0, 60)}`);
   }
 }
 
+const totalNetCost = totalGrossCost - totalReceived;
 const totalValue = totalTokenValue + totalWalletEth;
-const totalPnl = totalValue - totalCost;
-const totalPnlPct = totalCost > 0 ? (totalPnl / totalCost * 100) : 0;
+const totalPnl = totalValue - totalNetCost;
+const totalPnlPct = totalNetCost > 0 ? (totalPnl / totalNetCost * 100) : 0;
 console.log(`\n--- TOTAL ---`);
-console.log(`Cost:     ${totalCost.toFixed(6)} ETH`);
-console.log(`Tokens:   ${totalTokenValue.toFixed(6)} ETH`);
-console.log(`Recovered: ${totalWalletEth.toFixed(6)} ETH`);
-console.log(`Value:    ${totalValue.toFixed(6)} ETH (tokens + recovered ETH)`);
-console.log(`PnL:      ${totalPnl >= 0 ? "+" : ""}${totalPnl.toFixed(6)} ETH (${totalPnlPct >= 0 ? "+" : ""}${totalPnlPct.toFixed(1)}%)`);
+console.log(`Gross in:  ${totalGrossCost.toFixed(6)} ETH (sum of all buys)`);
+console.log(`Sold back: ${totalReceived.toFixed(6)} ETH (from sells)`);
+console.log(`Net cost:  ${totalNetCost.toFixed(6)} ETH (actual capital at risk)`);
+console.log(`Tokens:    ${totalTokenValue.toFixed(6)} ETH`);
+console.log(`Wallet:    ${totalWalletEth.toFixed(6)} ETH`);
+console.log(`Value:     ${totalValue.toFixed(6)} ETH (tokens + wallet ETH)`);
+console.log(`PnL:       ${totalPnl >= 0 ? "+" : ""}${totalPnl.toFixed(6)} ETH (${totalPnlPct >= 0 ? "+" : ""}${totalPnlPct.toFixed(1)}%)`);

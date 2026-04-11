@@ -14,7 +14,6 @@ import {
   FarcasterNetwork,
   Message,
 } from "@farcaster/hub-nodejs";
-import { readFileSync } from "fs";
 import { resolve } from "path";
 
 interface PostOptions {
@@ -23,29 +22,23 @@ interface PostOptions {
   imagePath?: string;
 }
 
-async function uploadImageToImgur(imagePath: string): Promise<string | null> {
-  // Farcaster doesn't support local images — need a URL.
-  // Try Zora IPFS upload if API key available, otherwise skip.
-  const apiKey = process.env.ZORA_API_KEY;
-  if (!apiKey) return null;
-
+async function uploadImage(imagePath: string): Promise<string | null> {
+  // Priority: Arweave (permanent, funded) → fail
+  // Zora uploader not used here (Farcaster, not Zora content)
+  // No free IPFS fallback — content won't stick
   try {
-    const { setApiKey, createZoraUploaderForCreator } = await import("@zoralabs/coins-sdk");
-    setApiKey(apiKey);
-
-    const imageBytes = readFileSync(imagePath);
-    const ext = imagePath.split(".").pop() || "png";
-    const mimeType = ext === "jpg" || ext === "jpeg" ? "image/jpeg" : `image/${ext}`;
-
-    // Use Zora's upload endpoint to get an IPFS URL
-    const uploader = createZoraUploaderForCreator("0x097677d3e2cde65af10be80ae5e67b8b68eb613d");
-    const result = await uploader(new File([imageBytes], `cast-image.${ext}`, { type: mimeType }));
-    console.log("📤 Image uploaded to IPFS:", result);
-    return result;
+    const { uploadToArweave } = await import("../src/arweave.js");
+    const url = await uploadToArweave(imagePath);
+    if (url) {
+      console.log("📤 Image uploaded to Arweave:", url);
+      return url;
+    }
   } catch (err) {
-    console.error("⚠️ Image upload failed:", err);
-    return null;
+    console.error("⚠️ Arweave upload failed:", (err as Error).message);
   }
+
+  console.error("⚠️ No upload method available — cast will be text-only");
+  return null;
 }
 
 export async function postCast(opts: PostOptions): Promise<{ hash: string; success: boolean }> {
@@ -61,13 +54,11 @@ export async function postCast(opts: PostOptions): Promise<{ hash: string; succe
 
   // Upload image if provided
   if (opts.imagePath) {
-    const imageUrl = await uploadImageToImgur(opts.imagePath);
+    const imageUrl = await uploadImage(opts.imagePath);
     if (imageUrl) {
-      // Convert ipfs:// to gateway URL for Farcaster
-      const gatewayUrl = imageUrl.startsWith("ipfs://")
-        ? `https://ipfs.decentralized-content.com/ipfs/${imageUrl.slice(7)}`
-        : imageUrl;
-      embeds.push({ url: gatewayUrl });
+      embeds.push({ url: imageUrl });
+    } else {
+      console.warn("⚠️ Image upload failed — cast will be text-only");
     }
   }
 
@@ -81,8 +72,13 @@ export async function postCast(opts: PostOptions): Promise<{ hash: string; succe
   const signerBytes = Buffer.from(signerKey, "hex");
   const signer = new NobleEd25519Signer(signerBytes);
 
+  // Use LONG_CAST (type 1) if text > 320 bytes, otherwise regular CAST (type 0)
+  const textBytes = new TextEncoder().encode(opts.text);
+  const castType = textBytes.length > 320 ? 1 : 0; // 0 = CAST, 1 = LONG_CAST
+
   const castResult = await makeCastAdd(
     {
+      type: castType,
       text: opts.text,
       embeds,
       embedsDeprecated: [],

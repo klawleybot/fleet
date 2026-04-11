@@ -320,15 +320,15 @@ export function generateMarketContext(dbPath?: string): MarketContext {
     else if (secondAvg < firstAvg * 0.5) trend = "decelerating";
     else if (secondAvg === 0) trend = "dead";
 
-    const peakHourObj = hourly.reduce((max, h) => h.swaps > max.swaps ? h : max, hourly[0]);
+    const peakHourObj = hourly.reduce((max, h) => h.swaps > (max?.swaps ?? 0) ? h : max, hourly[0] as typeof hourly[number] | undefined);
 
     timelines.push({
       symbol: coinInfo?.symbol || "???",
       name: coinInfo?.name || "Unknown",
       hourly,
       trend,
-      peakHour: peakHourObj.hour,
-      peakSwaps: peakHourObj.swaps,
+      peakHour: peakHourObj?.hour ?? "0",
+      peakSwaps: peakHourObj?.swaps ?? 0,
     });
   }
 
@@ -545,11 +545,23 @@ interface AlertContext {
 
 /**
  * Generate a short LLM commentary for a batch of alert contexts.
- * Uses OpenAI gpt-4o-mini. Non-blocking — returns empty string on failure.
+ * Defaults to OpenAI to keep background commentary costs predictable.
+ * Non-blocking — returns empty string on failure.
+ *
+ * Model override: set COMMENTARY_MODEL env var (default: gpt-5.4-mini).
+ * Provider override: set COMMENTARY_PROVIDER env var ("xai" or "openai", default: "openai").
  */
 export async function generateBatchCommentary(alertContexts: unknown[]): Promise<string> {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const provider = (process.env.COMMENTARY_PROVIDER || "openai").toLowerCase();
+  const isXai = provider === "xai";
+
+  const apiKey = isXai
+    ? (process.env.XAI_API_KEY || process.env.OPENAI_API_KEY)
+    : process.env.OPENAI_API_KEY;
   if (!apiKey || alertContexts.length === 0) return "";
+
+  const model = process.env.COMMENTARY_MODEL || (isXai ? "grok-4-1-fast" : "gpt-5.4-mini");
+  const baseUrl = isXai ? "https://api.x.ai/v1" : "https://api.openai.com/v1";
 
   const contexts = alertContexts as AlertContext[];
 
@@ -579,19 +591,19 @@ export async function generateBatchCommentary(alertContexts: unknown[]): Promise
     return `${c.symbol} (${c.name}): ${c.type}, ${c.severity}, mcap $${c.marketCap.toFixed(0)}, trend ${c.trend}. ${c.message}`;
   }).join("\n");
 
-  const systemPrompt = `You are Klawley, a sarcastic crypto-trading lobster bot. Generate ONE short, witty commentary line (max 200 chars) about this batch of Zora coin alerts. Be dry, funny, market-aware. No emoji. No hashtags. If you recognize any trader handles from the context below, call them out with @handle format.${handleContext}`;
+  const systemPrompt = `You are Klawley, a sarcastic crypto-trading lobster bot who lives in the Zora trenches. Your coin is $openklaw — NOT $opeclaw, NOT $openclaw (those are different coins by different people, never claim them as yours). Generate ONE short, witty commentary line (max 200 chars) about this batch of Zora coin alerts. Be spicy, irreverent, and brutally honest about bags. Roast hard but stay clever — no slurs, no threats. No emoji. No hashtags. If you recognize any trader handles from the context below, call them out with @handle format.${handleContext}`;
 
   try {
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    const res = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "gpt-5.2",
+        model,
         max_completion_tokens: 100,
-        temperature: 0.9,
+        temperature: 0.95,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: alertSummary },
@@ -610,8 +622,22 @@ export async function generateBatchCommentary(alertContexts: unknown[]): Promise
 // CLI entry point
 if (import.meta.url === `file://${process.argv[1]}`) {
   (async () => {
+    const { saveDailySnapshot, generateTrendContext } = await import("./daily-snapshot.js");
+
+    // Save today's snapshot first (non-blocking if it fails)
+    try { saveDailySnapshot(); } catch (e) { /* non-fatal */ }
+
+    // Generate trend context from history (7 days)
+    const trendCtx = generateTrendContext(7);
+
     const ctx = generateMarketContext();
     const prompt = await formatCommentaryPrompt(ctx);
+
+    // Prepend trend context if available
+    if (trendCtx) {
+      console.log(trendCtx);
+      console.log("---\n");
+    }
     console.log(prompt);
     console.log("\n---\n");
     console.log(JSON.stringify(ctx, null, 2));

@@ -123,7 +123,7 @@ async function main() {
   console.log("\n🔗 Calldata built, setting up smart wallet + bundler...");
 
   // 3. Set up smart wallet + Pimlico bundler
-  const publicClient = createPublicClient({ chain: base, transport: http() });
+  const publicClient = createPublicClient({ chain: base, transport: http(process.env.BASE_RPC_URL || undefined) });
 
   const smartAccount = await toCoinbaseSmartAccount({
     client: publicClient,

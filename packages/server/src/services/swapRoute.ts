@@ -119,28 +119,32 @@ export function resolveDeterministicBuyRoute(input: {
     return { path: [root], hops: 0 };
   }
 
-  const maxHops = Math.max(1, Math.min(8, input.maxHops ?? 3));
+  const maxHops = Math.max(1, Math.min(8, input.maxHops ?? 4));
+  const USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" as `0x${string}`;
+  const WETH = "0x4200000000000000000000000000000000000006" as `0x${string}`;
+  const anchors = new Set([zora, USDC, WETH]);
 
   const ancestry: `0x${string}`[] = [to];
   let cursor = to;
-  let foundZora = cursor === zora;
+  let foundAnchor = anchors.has(cursor);
 
-  for (let i = 0; i < maxHops && !foundZora; i += 1) {
+  for (let i = 0; i < maxHops && !foundAnchor; i += 1) {
     const next = parent.get(cursor);
     if (!next) break;
     ancestry.push(next);
     cursor = next;
-    if (cursor === zora) {
-      foundZora = true;
+    if (anchors.has(cursor)) {
+      foundAnchor = true;
       break;
     }
   }
 
-  if (!foundZora) {
-    throw new Error(`Deterministic route failed: did not reach ZORA anchor within ${maxHops} hop(s)`);
+  if (!foundAnchor) {
+    throw new Error(`Deterministic route failed: did not reach ZORA, USDC, or WETH anchor within ${maxHops} hop(s)`);
   }
 
-  // ancestry is [to,...,zora]; forward route is [root,zora,...,to]
+  // ancestry is [to,...,anchor]; forward route is [root,anchor,...,to]
+  // If anchor is USDC and root is WETH, the path is [WETH, USDC, ..., to]
   const forward = [root, ...ancestry.reverse()];
   return {
     path: forward,

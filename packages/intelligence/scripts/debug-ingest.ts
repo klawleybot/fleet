@@ -2,11 +2,34 @@ import * as zoraSdk from "@zoralabs/coins-sdk";
 import { env } from "../src/config.js";
 import { db } from "../src/db.js";
 
-const getCoinSwaps = (zoraSdk as any).getCoinSwaps;
-const setApiKey = (zoraSdk as any).setApiKey;
+interface SwapEdge {
+  node: {
+    id?: string;
+    blockTimestamp?: string;
+    activityType?: string;
+  };
+}
+
+interface GetCoinSwapsResponse {
+  data?: {
+    zora20Token?: {
+      swapActivities?: {
+        edges?: SwapEdge[];
+      };
+    };
+  };
+}
+
+const sdk = zoraSdk as typeof import("@zoralabs/coins-sdk");
+const getCoinSwaps = sdk.getCoinSwaps;
+const setApiKey = sdk.setApiKey;
 if (env.ZORA_API_KEY && setApiKey) setApiKey(env.ZORA_API_KEY);
 
-const res = await getCoinSwaps({ address: "0xb23c6e17fe82f958ade869d31055c445f76c5c43", chain: 8453, first: 5 });
+const res = await getCoinSwaps({
+  address: "0xb23c6e17fe82f958ade869d31055c445f76c5c43",
+  chain: 8453,
+  first: 5,
+}) as GetCoinSwapsResponse;
 const edges = res?.data?.zora20Token?.swapActivities?.edges ?? [];
 console.log(edges.length, "swaps from API");
 

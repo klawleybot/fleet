@@ -10,26 +10,32 @@ const positions = db.listAllPositions().filter(
 
 let totalHoldings = 0n;
 let totalCost = 0n;
+let totalReceived = 0n;
 
 console.log(`Wallet positions for ${coin}:\n`);
 for (const p of positions) {
   const h = BigInt(p.holdingsRaw);
   const c = BigInt(p.totalCostWei);
+  const r = BigInt(p.totalReceivedWei);
+  const net = c > r ? c - r : 0n;
   totalHoldings += h;
   totalCost += c;
-  console.log(`  wallet #${p.walletId} | holdings: ${(Number(h) / 1e18).toExponential(4)} tokens | cost: ${(Number(c) / 1e18).toFixed(6)} ETH`);
+  totalReceived += r;
+  console.log(`  wallet #${p.walletId} | holdings: ${(Number(h) / 1e18).toExponential(4)} tokens | net cost: ${(Number(net) / 1e18).toFixed(6)} ETH (in ${(Number(c) / 1e18).toFixed(6)} - out ${(Number(r) / 1e18).toFixed(6)})`);
 }
+
+const netCost = totalCost > totalReceived ? totalCost - totalReceived : 0n;
 
 console.log(`\nTotal: ${positions.length} wallets`);
 console.log(`Total holdings: ${(Number(totalHoldings) / 1e18).toExponential(4)} tokens`);
-console.log(`Total cost: ${(Number(totalCost) / 1e18).toFixed(6)} ETH`);
+console.log(`Net cost: ${(Number(netCost) / 1e18).toFixed(6)} ETH (in ${(Number(totalCost) / 1e18).toFixed(6)} - out ${(Number(totalReceived) / 1e18).toFixed(6)})`);
 
 // Quote in smaller chunks to avoid overflow
 console.log(`\nQuoting value...`);
 try {
   const value = await quoteCoinToEth({ coinAddress: coin, amount: totalHoldings });
   console.log(`Quoted value: ${(Number(value) / 1e18).toFixed(6)} ETH`);
-  const pnl = Number(value) / 1e18 - Number(totalCost) / 1e18;
+  const pnl = Number(value) / 1e18 - Number(netCost) / 1e18;
   console.log(`PnL: ${pnl >= 0 ? "+" : ""}${pnl.toFixed(6)} ETH`);
 } catch (e: any) {
   console.log(`Quote failed: ${e.message}`);

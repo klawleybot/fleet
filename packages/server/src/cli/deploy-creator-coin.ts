@@ -69,7 +69,7 @@ async function main() {
   console.log("─".repeat(40));
 
   // Verify EOA is owner of smart wallet
-  const publicClient = createPublicClient({ chain: base, transport: http() });
+  const publicClient = createPublicClient({ chain: base, transport: http(process.env.BASE_RPC_URL || undefined) });
   const isOwner = await publicClient.readContract({
     address: SMART_WALLET,
     abi: [{

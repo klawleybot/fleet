@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { decodeAbiParameters, decodeFunctionData } from "viem";
+import { decodeFunctionData } from "viem";
 import {
   applySlippage,
   encodeQuoteExactInputCalldata,

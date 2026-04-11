@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeAll } from "vitest";
-import { sweepFleet, createFleet, getFleetByName } from "../src/services/fleet.js";
+import { describe, it, expect } from "vitest";
+import { sweepFleet, createFleet } from "../src/services/fleet.js";
 
 describe("sweep", () => {
   it("sweeps from source fleet to explicit address", async () => {

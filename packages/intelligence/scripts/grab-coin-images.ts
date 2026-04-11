@@ -12,6 +12,24 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DB = resolve(__dirname, "../.data/zora-intelligence.db");
 const OUT_DIR = resolve(__dirname, "../.data/coin-thumbnails");
 
+interface CoinRow {
+  address: string;
+  symbol: string;
+  name: string;
+  raw_json: string | null;
+}
+
+interface CoinRawMetadata {
+  mediaContent?: {
+    previewImage?: {
+      medium?: string;
+      small?: string;
+    };
+  };
+  profileImage?: string;
+  image?: string;
+}
+
 async function main() {
   const db = new Database(process.env.INTEL_DB_PATH || DEFAULT_DB, { readonly: true });
 
@@ -23,7 +41,7 @@ async function main() {
     WHERE ca.swap_count_24h >= 10
     ORDER BY ca.swap_count_24h DESC
     LIMIT 5
-  `).all() as any[];
+  `).all() as CoinRow[];
 
   if (!existsSync(OUT_DIR)) mkdirSync(OUT_DIR, { recursive: true });
 
@@ -32,7 +50,7 @@ async function main() {
   for (const coin of topCoins) {
     try {
       // Try to get image from raw_json metadata
-      const raw = JSON.parse(coin.raw_json || "{}");
+      const raw = JSON.parse(coin.raw_json || "{}") as CoinRawMetadata;
       const imageUrl = raw.mediaContent?.previewImage?.medium
         || raw.mediaContent?.previewImage?.small
         || raw.profileImage

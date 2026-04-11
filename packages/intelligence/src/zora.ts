@@ -136,8 +136,9 @@ function upsertSwap(coinAddress: string, chainId: number, swap: any) {
   const sender = String(swap.senderAddress ?? "").toLowerCase();
   const recipient = String(swap.recipientAddress ?? "").toLowerCase();
   const ts = swap.blockTimestamp ?? new Date().toISOString();
-  const amountUsdc = Number(swap.currencyAmountWithPrice?.priceUsdc ?? 0);
+  const priceUsdc = Number(swap.currencyAmountWithPrice?.priceUsdc ?? 0);
   const amountDecimal = Number(swap.currencyAmountWithPrice?.currencyAmount?.amountDecimal ?? 0);
+  const amountUsdc = priceUsdc * amountDecimal;
   const coinAmount = Number(swap.coinAmount ?? 0);
   const result = db.prepare(`
     INSERT OR IGNORE INTO coin_swaps (

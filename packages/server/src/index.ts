@@ -121,7 +121,7 @@ async function start(): Promise<void> {
     // Initialize intelligence engine (needed for zoraSignals bridge + autonomy)
     try {
       initIntelligenceEngine({
-        dbPath: process.env.ZORA_INTEL_DB_PATH || undefined,
+        ...(process.env.ZORA_INTEL_DB_PATH && { dbPath: process.env.ZORA_INTEL_DB_PATH }),
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "intelligence init failed";

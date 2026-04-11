@@ -1,5 +1,4 @@
 import { getIntelligenceEngine } from "../src/services/intelligence.js";
-import type Database from "better-sqlite3";
 
 /** Seed a coin into the engine's DB with sensible defaults. */
 export function seedCoin(

@@ -18,10 +18,30 @@ export function initIntelligenceEngine(config?: {
   const zoraApiKey = config?.zoraApiKey ?? process.env.ZORA_API_KEY;
   const zoraChainId = config?.zoraChainId ?? (process.env.ZORA_CHAIN_ID ? Number(process.env.ZORA_CHAIN_ID) : undefined);
 
+  // Parse optional alert threshold overrides from env
+  const envNum = (key: string) => {
+    const v = process.env[key];
+    return v ? Number(v) : undefined;
+  };
+
+  const optionalNumbers = {
+    alertCoinSwaps1h: envNum("ALERT_COIN_SWAPS_1H"),
+    alertMinMomentum1h: envNum("ALERT_MIN_MOMENTUM_1H"),
+    alertMinAcceleration1h: envNum("ALERT_MIN_ACCELERATION_1H"),
+    alertAccelSpikeMinSwaps1h: envNum("ALERT_ACCEL_SPIKE_MIN_SWAPS_1H"),
+    alertAccelSpikeMinAcceleration1h: envNum("ALERT_ACCEL_SPIKE_MIN_ACCELERATION_1H"),
+    alertPerCoinCooldownMin: envNum("ALERT_PER_COIN_COOLDOWN_MIN"),
+    alertNoveltyWindowHours: envNum("ALERT_NOVELTY_WINDOW_HOURS"),
+    alertWhaleSwapUsd: envNum("ALERT_WHALE_SWAP_USD"),
+  };
+
   engine = new IntelligenceEngine({
     ...(zoraApiKey ? { zoraApiKey } : {}),
-    ...(zoraChainId ? { zoraChainId } : {}),
+    ...(zoraChainId !== undefined ? { zoraChainId } : {}),
     ...(config?.dbPath ? { dbPath: config.dbPath } : {}),
+    ...Object.fromEntries(
+      Object.entries(optionalNumbers).filter(([, value]) => value !== undefined),
+    ),
   });
 
   logger.info({ dbPath: engine.config.dbPath }, "intelligence engine initialized");

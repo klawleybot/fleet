@@ -235,6 +235,121 @@ async function main() {
     return;
   }
 
+  if (cmd === "positions") {
+    const { getOpenPositions, getClosedPositions, closeDb } = await import("./positions.js");
+    const open = getOpenPositions();
+    if (open.length === 0) {
+      console.log("No open positions.");
+    } else {
+      console.log("Open positions:");
+      console.table(open.map(p => ({
+        coin: p.symbol || p.coin_address.slice(0, 12),
+        entry_eth: (Number(BigInt(p.entry_eth_total)) / 1e18).toFixed(6),
+        token_bal: (Number(BigInt(p.token_balance)) / 1e18).toFixed(2),
+        opened: p.created_at.slice(0, 16),
+      })));
+    }
+    if (process.argv[3] === "--closed") {
+      const closed = getClosedPositions(10);
+      if (closed.length > 0) {
+        console.log("\nClosed positions:");
+        console.table(closed.map(p => ({
+          coin: p.symbol || p.coin_address.slice(0, 12),
+          entry_eth: (Number(BigInt(p.entry_eth_total)) / 1e18).toFixed(6),
+          exit_eth: (Number(BigInt(p.exit_eth_total)) / 1e18).toFixed(6),
+          pnl: `${p.pnl_pct >= 0 ? "+" : ""}${p.pnl_pct.toFixed(1)}%`,
+          closed: p.closed_at?.slice(0, 16) ?? "",
+        })));
+      }
+    }
+    closeDb();
+    return;
+  }
+
+  if (cmd === "sell-monitor") {
+    const { runSellMonitor, formatMonitorReport } = await import("./sell-monitor.js");
+    const { closeDb } = await import("./positions.js");
+    const dryRun = process.argv.includes("--dry-run");
+    if (dryRun) console.log("🏜️ DRY RUN MODE\n");
+    try {
+      const report = await runSellMonitor({ dryRun });
+      console.log(formatMonitorReport(report));
+      if (report.announcements.length > 0) {
+        console.log("\n--- ANNOUNCEMENTS ---");
+        for (const a of report.announcements) console.log(a + "\n");
+      }
+    } finally {
+      closeDb();
+    }
+    return;
+  }
+
+  if (cmd === "scout-live") {
+    const { runLive, formatLiveReport } = await import("./scout-live.js");
+    const { closeDb } = await import("./positions.js");
+    const dryRun = process.argv.includes("--dry-run");
+    if (dryRun) console.log("🏜️ DRY RUN MODE\n");
+    try {
+      const report = await runLive({ dryRun });
+      console.log(formatLiveReport(report));
+      if (report.announcements.length > 0) {
+        console.log("\n--- ANNOUNCEMENTS ---");
+        for (const a of report.announcements) console.log(a + "\n");
+      }
+    } finally {
+      closeDb();
+    }
+    return;
+  }
+
+  if (cmd === "scout-exec") {
+    const { runScout } = await import("./scout.js");
+    const { evaluateScoutReport, formatExecutorReport, DEFAULT_POLICY } = await import("./scout-executor.js");
+    const { IntelligenceEngine } = await import("./engine.js");
+    const engine = new IntelligenceEngine({
+      zoraApiKey: env.ZORA_API_KEY,
+      zoraChainId: env.ZORA_CHAIN_ID,
+    });
+    try {
+      console.log("Running data sync...");
+      await engine.pollOnce();
+      const report = await runScout(engine);
+      const capitalUsd = Number(process.argv[3] || "200");
+      const positions = Number(process.argv[4] || "0");
+      const execReport = evaluateScoutReport(report, DEFAULT_POLICY, capitalUsd, positions);
+      console.log(formatExecutorReport(execReport));
+      if (process.argv.includes("--json")) {
+        console.log("\n--- JSON ---");
+        console.log(JSON.stringify(execReport, null, 2));
+      }
+    } finally {
+      engine.close();
+    }
+    return;
+  }
+
+  if (cmd === "scout") {
+    const { runScout, formatScoutReport } = await import("./scout.js");
+    const { IntelligenceEngine } = await import("./engine.js");
+    const engine = new IntelligenceEngine({
+      zoraApiKey: env.ZORA_API_KEY,
+      zoraChainId: env.ZORA_CHAIN_ID,
+    });
+    try {
+      console.log("Running data sync...");
+      await engine.pollOnce();
+      const report = await runScout(engine);
+      console.log(formatScoutReport(report));
+      if (process.argv[3] === "--json") {
+        console.log("\n--- JSON ---");
+        console.log(JSON.stringify(report, null, 2));
+      }
+    } finally {
+      engine.close();
+    }
+    return;
+  }
+
   throw new Error(`Unknown command: ${cmd}`);
 }
 

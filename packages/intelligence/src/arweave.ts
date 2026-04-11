@@ -36,11 +36,9 @@ export async function uploadToArweave(filePath: string, contentType?: string): P
   
   const data = fs.readFileSync(filePath);
   const mime = contentType ?? guessMimeType(filePath);
+  const filename = path.basename(filePath);
   
-  const tags = [
-    { name: "Content-Type", value: mime },
-    { name: "App-Name", value: "klawley-intel" },
-  ];
+  const tags = buildTags(mime, data.length, filename);
 
   const receipt = await uploader.upload(data, { tags });
   const txId = receipt.id;
@@ -58,14 +56,21 @@ export async function uploadBufferToArweave(
 ): Promise<string> {
   const uploader = await getUploader();
   
-  const tags = [
-    { name: "Content-Type", value: contentType },
-    { name: "App-Name", value: "klawley-intel" },
-    ...(filename ? [{ name: "Filename", value: filename }] : []),
-  ];
+  const tags = buildTags(contentType, buffer.length, filename);
 
   const receipt = await uploader.upload(buffer, { tags });
   return `https://gateway.irys.xyz/${receipt.id}`;
+}
+
+/**
+ * Upload a string (e.g. JSON metadata) to Arweave via Irys.
+ */
+export async function uploadDataToArweave(
+  data: string,
+  contentType: string = "application/json",
+  filename?: string,
+): Promise<string> {
+  return uploadBufferToArweave(Buffer.from(data, "utf-8"), contentType, filename ?? "metadata.json");
 }
 
 /**
@@ -78,6 +83,37 @@ export async function getIrysBalance(): Promise<{ address: string; balance: stri
     address: uploader.address ?? "unknown",
     balance: balance.toString(),
   };
+}
+
+/**
+ * Build standard Irys/Arweave tags for uploads.
+ * These map to HTTP headers on gateway responses.
+ */
+function buildTags(
+  contentType: string,
+  contentLength: number,
+  filename?: string,
+): Array<{ name: string; value: string }> {
+  const tags: Array<{ name: string; value: string }> = [
+    { name: "Content-Type", value: contentType },
+    { name: "Content-Length", value: String(contentLength) },
+    { name: "App-Name", value: "klawley-intel" },
+    // Immutable content — cache forever
+    { name: "Cache-Control", value: "public, max-age=31536000, immutable" },
+    { name: "Upload-Timestamp", value: new Date().toISOString() },
+  ];
+
+  if (filename) {
+    // inline for images so browsers render them; attachment for other types
+    const isInline = contentType.startsWith("image/") || contentType === "application/json";
+    const disposition = isInline
+      ? `inline; filename="${filename}"`
+      : `attachment; filename="${filename}"`;
+    tags.push({ name: "Content-Disposition", value: disposition });
+    tags.push({ name: "Filename", value: filename });
+  }
+
+  return tags;
 }
 
 function guessMimeType(filePath: string): string {
