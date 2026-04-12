@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { BundlerRouter } from "../src/services/bundler/router.js";
 import type {
   BundlerAdapter,
-  Hex,
   SendUserOperationResult,
   UserOperationGasEstimate,
   UserOperationLike,
@@ -24,7 +23,7 @@ function adapter(input: {
       callGasLimit: "0x3",
     }),
     sendUserOperation: input.sendImpl,
-    getUserOperationReceipt: async (_userOpHash: Hex): Promise<UserOperationReceipt> =>
+    getUserOperationReceipt: async (): Promise<UserOperationReceipt> =>
       input.receipt ?? { included: false },
     getUserOperationByHash: async () => null,
     supportedEntryPoints: async () => ["0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789"],

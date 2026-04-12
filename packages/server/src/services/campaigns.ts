@@ -1,7 +1,6 @@
-import { createPublicClient, formatEther, http, isAddress, parseEther, zeroAddress, type Address } from "viem";
+import { createPublicClient, formatEther, http, isAddress, parseEther, type Address } from "viem";
 import { db } from "../db/index.js";
 import type {
-  CampaignExecutionRecord,
   CampaignExecutionResult,
   CampaignMetricsSnapshotRecord,
   CampaignPhase,
@@ -10,7 +9,6 @@ import type {
   CampaignRecord,
   CampaignSettlementMode,
   CampaignStatus,
-  CampaignTradeSide,
 } from "../types.js";
 import { getChainConfig } from "./network.js";
 import { logger } from "../logger.js";
@@ -33,7 +31,6 @@ const BURN_SWAP_THRESHOLD_24H = 20;
 const BURN_MAX_GAIN_SHARE_BPS = 5000;
 const TREASURY_RETAIN_GAIN_BPS = 5000;
 const MIN_EXTERNAL_HOLDER_THRESHOLD = 8;
-const FARMED_EXTERNAL_ACTIVITY_CAP_BPS = 2500;
 const DEFAULT_TARGET_SELF_SNIPE_BPS = 100;
 
 type MetricsInput = {
@@ -44,6 +41,18 @@ type MetricsInput = {
   momentumScore?: number | null;
   externalWalletBuyCount24h?: number | null;
 };
+
+interface IntelligenceCoinDetail {
+  coin?: {
+    volume_24h?: number | string | null;
+  };
+  analytics?: {
+    swap_count_24h?: number | string | null;
+    net_flow_usdc_24h?: number | string | null;
+    momentum_score?: number | string | null;
+    buy_count_24h?: number | string | null;
+  };
+}
 
 export interface CreateCampaignInput {
   coinAddress: Address;
@@ -129,6 +138,43 @@ function isBlockscoutTokenCountersResponse(value: unknown): value is BlockscoutT
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function parseIntelligenceCoinDetail(value: unknown): IntelligenceCoinDetail | null {
+  if (!isRecord(value)) return null;
+
+  const coin = isRecord(value.coin) ? value.coin : undefined;
+  const analytics = isRecord(value.analytics) ? value.analytics : undefined;
+
+  return {
+    coin: coin
+      ? { volume_24h: typeof coin.volume_24h === "number" || typeof coin.volume_24h === "string" ? coin.volume_24h : null }
+      : undefined,
+    analytics: analytics
+      ? {
+          swap_count_24h:
+            typeof analytics.swap_count_24h === "number" || typeof analytics.swap_count_24h === "string"
+              ? analytics.swap_count_24h
+              : null,
+          net_flow_usdc_24h:
+            typeof analytics.net_flow_usdc_24h === "number" || typeof analytics.net_flow_usdc_24h === "string"
+              ? analytics.net_flow_usdc_24h
+              : null,
+          momentum_score:
+            typeof analytics.momentum_score === "number" || typeof analytics.momentum_score === "string"
+              ? analytics.momentum_score
+              : null,
+          buy_count_24h:
+            typeof analytics.buy_count_24h === "number" || typeof analytics.buy_count_24h === "string"
+              ? analytics.buy_count_24h
+              : null,
+        }
+      : undefined,
+  };
+}
+
 async function getUniqueHolders(coinAddress: Address): Promise<number> {
   try {
     const resp = await fetch(`https://base.blockscout.com/api/v2/tokens/${coinAddress}/counters`);
@@ -154,8 +200,8 @@ function getWalletPositionForCoin(coinAddress: Address) {
   return { wallet, position };
 }
 
-export async function createCampaignFromDeployment(input: CreateCampaignInput): Promise<CampaignRecord> {
-  if (!isAddress(input.coinAddress)) throw new Error(`Invalid coin address: ${input.coinAddress}`);
+export function createCampaignFromDeployment(input: CreateCampaignInput): CampaignRecord {
+  if (!isAddress(input.coinAddress)) throw new Error(`Invalid coin address: ${String(input.coinAddress)}`);
 
   const active = db.listCampaignsByStatus(["active", "planned"]);
   if (active.length >= MAX_ACTIVE_CAMPAIGNS) {
@@ -221,7 +267,7 @@ export async function snapshotCampaignMetrics(campaignId: number, overrides?: Me
 
   try {
     const intel = getIntelligenceEngine();
-    const detail = intel.getCoinDetail(campaign.coinAddress);
+    const detail = parseIntelligenceCoinDetail(intel.getCoinDetail(campaign.coinAddress));
     volume24hUsd = overrides?.volume24hUsd ?? Number(detail?.coin?.volume_24h ?? 0);
     swaps24h = overrides?.swaps24h ?? Number(detail?.analytics?.swap_count_24h ?? 0);
     netFlow24hUsd = overrides?.netFlow24hUsd ?? Number(detail?.analytics?.net_flow_usdc_24h ?? 0);
@@ -231,7 +277,7 @@ export async function snapshotCampaignMetrics(campaignId: number, overrides?: Me
     // intelligence optional in tests
   }
 
-  const holders = overrides?.holders ?? await getUniqueHolders(campaign.coinAddress as Address);
+  const holders = overrides?.holders ?? await getUniqueHolders(campaign.coinAddress);
   const snapshot = db.createCampaignMetricsSnapshot({
     campaignId,
     holders: holders ?? 0,
@@ -354,9 +400,6 @@ export async function planCampaign(campaignId: number, now = new Date()): Promis
     });
   }
 
-  const buyBudgetRemainingWei = parseBigintish(campaign.selfSnipeEthWei, ZERO) === ZERO
-    ? DEFAULT_MAX_BUY_STEP_ETH * 3n
-    : DEFAULT_MAX_BUY_STEP_ETH * 2n;
   const plan = db.createCampaignPlan({
     campaignId,
     phase,
@@ -437,7 +480,7 @@ async function readCurrentTokenBalance(coinAddress: Address): Promise<bigint> {
       functionName: "balanceOf",
       args: [KLAWLEY_SMART_WALLET],
     });
-    return result as bigint;
+    return result;
   } catch {
     const local = getWalletPositionForCoin(coinAddress);
     return local?.position ? BigInt(local.position.holdingsRaw) : ZERO;
@@ -481,12 +524,12 @@ async function executePlanStep(step: CampaignPlanStep): Promise<CampaignExecutio
       swapResult = await swapFromSmartAccount({
         smartAccountName: KLAWLEY_ACCOUNT_NAME,
         fromToken: WETH_BASE,
-        toToken: campaign.coinAddress as Address,
+        toToken: campaign.coinAddress,
         fromAmount: amountInWei,
         slippageBps: step.slippageBps,
       });
     } else {
-      const currentBalance = await readCurrentTokenBalance(campaign.coinAddress as Address);
+      const currentBalance = await readCurrentTokenBalance(campaign.coinAddress);
       const sellBps = BigInt(step.amountWei);
       const rawSell = (currentBalance * sellBps) / 10_000n;
       const minRetained = (currentBalance * BigInt(campaign.targetAllocationBps)) / 10_000n;
@@ -514,7 +557,7 @@ async function executePlanStep(step: CampaignPlanStep): Promise<CampaignExecutio
       }
       swapResult = await swapFromSmartAccount({
         smartAccountName: KLAWLEY_ACCOUNT_NAME,
-        fromToken: campaign.coinAddress as Address,
+        fromToken: campaign.coinAddress,
         toToken: WETH_BASE,
         fromAmount: amountInWei,
         slippageBps: step.slippageBps,
@@ -529,8 +572,8 @@ async function executePlanStep(step: CampaignPlanStep): Promise<CampaignExecutio
       status: swapResult.status === "complete" ? "confirmed" : "failed",
       amountInWei: amountInWei.toString(),
       amountOutRaw: swapResult.amountOut ?? null,
-      txHash: (swapResult.txHash ?? null) as `0x${string}` | null,
-      userOpHash: (swapResult.userOpHash ?? null) as `0x${string}` | null,
+      txHash: swapResult.txHash ?? null,
+      userOpHash: swapResult.userOpHash ?? null,
       summary: `${step.side} ${swapResult.status}`,
       simulationOnly: false,
       reason: step.rationale,
@@ -539,11 +582,11 @@ async function executePlanStep(step: CampaignPlanStep): Promise<CampaignExecutio
     });
 
     if (swapResult.status === "complete") {
-      const walletRef = getWalletPositionForCoin(campaign.coinAddress as Address);
+      const walletRef = getWalletPositionForCoin(campaign.coinAddress);
       if (walletRef) {
         recordTradePosition({
           walletId: walletRef.wallet.id,
-          coinAddress: campaign.coinAddress as Address,
+          coinAddress: campaign.coinAddress,
           isBuy: step.side === "buy",
           ethAmountWei: step.side === "buy" ? amountInWei.toString() : (swapResult.amountOut ?? "0"),
           tokenAmount: step.side === "buy" ? (swapResult.amountOut ?? "0") : amountInWei.toString(),
@@ -711,7 +754,7 @@ export async function ensurePlansForActiveCampaigns(): Promise<CampaignPlan[]> {
   return plans;
 }
 
-export async function runCampaignPlannerOnce(now = new Date()) {
+export async function runCampaignPlannerOnce() {
   const plans = await ensurePlansForActiveCampaigns();
   logger.info({ plans: plans.length }, "campaign planner tick complete");
   return plans;

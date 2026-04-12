@@ -9,6 +9,48 @@ import {
 
 export const intelligenceRouter = Router();
 
+interface WatchlistBody {
+  coinAddress?: string;
+  listName?: string;
+  label?: string;
+  notes?: string;
+}
+
+interface CoinDetailResponse {
+  coin?: unknown;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function parseStringQueryValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function parseLimit(value: unknown, fallback: number, max: number): number {
+  const parsed = Number(parseStringQueryValue(value) ?? fallback);
+  return Math.min(max, Math.max(1, parsed));
+}
+
+function parseIntervalSec(value: unknown): number | undefined {
+  return typeof value === "number" ? value : undefined;
+}
+
+function parseWatchlistBody(value: unknown): WatchlistBody {
+  if (!isRecord(value)) return {};
+  return {
+    coinAddress: typeof value.coinAddress === "string" ? value.coinAddress : undefined,
+    listName: typeof value.listName === "string" ? value.listName : undefined,
+    label: typeof value.label === "string" ? value.label : undefined,
+    notes: typeof value.notes === "string" ? value.notes : undefined,
+  };
+}
+
+function isCoinDetailResponse(value: unknown): value is CoinDetailResponse {
+  return isRecord(value);
+}
+
 // ============================================================
 // Daemon control
 // ============================================================
@@ -19,7 +61,7 @@ intelligenceRouter.get("/status", (_req, res) => {
 
 intelligenceRouter.post("/start", (req, res) => {
   try {
-    const intervalSec = req.body?.intervalSec ? Number(req.body.intervalSec) : undefined;
+    const intervalSec = isRecord(req.body) ? parseIntervalSec(req.body.intervalSec) : undefined;
     const status = startIntelligenceLoop(intervalSec ? { intervalSec } : undefined);
     return res.json(status);
   } catch (err) {
@@ -32,14 +74,16 @@ intelligenceRouter.post("/stop", (_req, res) => {
   return res.json(stopIntelligenceLoop());
 });
 
-intelligenceRouter.post("/tick", async (_req, res) => {
-  try {
-    const result = await runIntelligenceTick();
-    return res.json(result);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Tick failed";
-    return res.status(500).json({ error: message });
-  }
+intelligenceRouter.post("/tick", (_req, res) => {
+  void (async () => {
+    try {
+      const result = await runIntelligenceTick();
+      res.json(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Tick failed";
+      res.status(500).json({ error: message });
+    }
+  })();
 });
 
 // ============================================================
@@ -48,7 +92,7 @@ intelligenceRouter.post("/tick", async (_req, res) => {
 
 intelligenceRouter.get("/coins/recent", (req, res) => {
   try {
-    const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 20)));
+    const limit = parseLimit(isRecord(req.query) ? req.query.limit : undefined, 20, 100);
     const engine = getIntelligenceEngine();
     return res.json({ coins: engine.recentCoins(limit) });
   } catch (err) {
@@ -59,7 +103,7 @@ intelligenceRouter.get("/coins/recent", (req, res) => {
 
 intelligenceRouter.get("/coins/top", (req, res) => {
   try {
-    const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 20)));
+    const limit = parseLimit(isRecord(req.query) ? req.query.limit : undefined, 20, 100);
     const engine = getIntelligenceEngine();
     return res.json({ coins: engine.topVolumeCoins(limit) });
   } catch (err) {
@@ -71,7 +115,10 @@ intelligenceRouter.get("/coins/top", (req, res) => {
 intelligenceRouter.get("/coins/:address", (req, res) => {
   try {
     const engine = getIntelligenceEngine();
-    const detail = engine.getCoinDetail(req.params.address!);
+    const detail: unknown = engine.getCoinDetail(req.params.address);
+    if (!isCoinDetailResponse(detail)) {
+      return res.status(500).json({ error: "Invalid coin detail response" });
+    }
     if (!detail.coin) return res.status(404).json({ error: "Coin not found" });
     return res.json(detail);
   } catch (err) {
@@ -86,7 +133,7 @@ intelligenceRouter.get("/coins/:address", (req, res) => {
 
 intelligenceRouter.get("/analytics", (req, res) => {
   try {
-    const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 20)));
+    const limit = parseLimit(isRecord(req.query) ? req.query.limit : undefined, 20, 100);
     const engine = getIntelligenceEngine();
     return res.json({ analytics: engine.topAnalytics(limit) });
   } catch (err) {
@@ -101,7 +148,7 @@ intelligenceRouter.get("/analytics", (req, res) => {
 
 intelligenceRouter.get("/alerts", (req, res) => {
   try {
-    const limit = Math.min(200, Math.max(1, Number(req.query.limit ?? 50)));
+    const limit = parseLimit(isRecord(req.query) ? req.query.limit : undefined, 50, 200);
     const engine = getIntelligenceEngine();
     return res.json({ alerts: engine.latestAlerts(limit) });
   } catch (err) {
@@ -110,15 +157,17 @@ intelligenceRouter.get("/alerts", (req, res) => {
   }
 });
 
-intelligenceRouter.post("/alerts/dispatch", async (_req, res) => {
-  try {
-    const engine = getIntelligenceEngine();
-    const result = await engine.dispatchPendingAlerts();
-    return res.json({ dispatched: result !== null, message: result });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Dispatch failed";
-    return res.status(500).json({ error: message });
-  }
+intelligenceRouter.post("/alerts/dispatch", (_req, res) => {
+  void (async () => {
+    try {
+      const engine = getIntelligenceEngine();
+      const result = await engine.dispatchPendingAlerts();
+      res.json({ dispatched: result !== null, message: result });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Dispatch failed";
+      res.status(500).json({ error: message });
+    }
+  })();
 });
 
 // ============================================================
@@ -127,7 +176,7 @@ intelligenceRouter.post("/alerts/dispatch", async (_req, res) => {
 
 intelligenceRouter.get("/watchlist", (req, res) => {
   try {
-    const listName = (req.query.listName as string) || "default";
+    const listName = isRecord(req.query) ? parseStringQueryValue(req.query.listName) ?? "default" : "default";
     const engine = getIntelligenceEngine();
     return res.json({ items: engine.watchlistList(listName) });
   } catch (err) {
@@ -138,10 +187,10 @@ intelligenceRouter.get("/watchlist", (req, res) => {
 
 intelligenceRouter.post("/watchlist", (req, res) => {
   try {
-    const { coinAddress, listName, label, notes } = req.body ?? {};
+    const { coinAddress, listName, label, notes } = parseWatchlistBody(req.body);
     if (!coinAddress) return res.status(400).json({ error: "coinAddress is required" });
     const engine = getIntelligenceEngine();
-    const result = engine.watchlistAdd(coinAddress, listName, label, notes);
+    const result: unknown = engine.watchlistAdd(coinAddress, listName, label, notes);
     return res.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to add to watchlist";
@@ -151,9 +200,9 @@ intelligenceRouter.post("/watchlist", (req, res) => {
 
 intelligenceRouter.delete("/watchlist/:coinAddress", (req, res) => {
   try {
-    const listName = (req.query.listName as string) || "default";
+    const listName = isRecord(req.query) ? parseStringQueryValue(req.query.listName) ?? "default" : "default";
     const engine = getIntelligenceEngine();
-    const removed = engine.watchlistRemove(req.params.coinAddress!, listName);
+    const removed = engine.watchlistRemove(req.params.coinAddress, listName);
     return res.json({ removed });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to remove from watchlist";
@@ -163,8 +212,8 @@ intelligenceRouter.delete("/watchlist/:coinAddress", (req, res) => {
 
 intelligenceRouter.get("/watchlist/moves", (req, res) => {
   try {
-    const listName = (req.query.listName as string) || "default";
-    const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 25)));
+    const listName = isRecord(req.query) ? parseStringQueryValue(req.query.listName) ?? "default" : "default";
+    const limit = parseLimit(isRecord(req.query) ? req.query.limit : undefined, 25, 100);
     const engine = getIntelligenceEngine();
     return res.json({ moves: engine.watchlistMoves(listName, limit) });
   } catch (err) {

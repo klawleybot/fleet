@@ -61,24 +61,26 @@ async function refreshMasterBalance(): Promise<string> {
   return cachedMasterBalanceEth;
 }
 
-app.get("/health", async (_req, res) => {
-  try {
-    const trades = db.listTrades();
-    const allWallets = db.listWallets();
-    const activeFleetCount = allWallets.filter((w) => !w.isMaster).length;
-    const masterBalanceEth = await refreshMasterBalance();
+app.get("/health", (_req, res) => {
+  void (async () => {
+    try {
+      const trades = db.listTrades();
+      const allWallets = db.listWallets();
+      const activeFleetCount = allWallets.filter((w) => !w.isMaster).length;
+      const masterBalanceEth = await refreshMasterBalance();
 
-    res.json({
-      ok: true,
-      uptimeSec: Math.floor(process.uptime()),
-      startedAt,
-      lastTradeAt: trades.length > 0 ? trades[0]!.createdAt : null,
-      activeFleetCount,
-      masterBalanceEth,
-    });
-  } catch {
-    res.json({ ok: true, uptimeSec: Math.floor(process.uptime()), startedAt });
-  }
+      res.json({
+        ok: true,
+        uptimeSec: Math.floor(process.uptime()),
+        startedAt,
+        lastTradeAt: trades.length > 0 ? trades[0]!.createdAt : null,
+        activeFleetCount,
+        masterBalanceEth,
+      });
+    } catch {
+      res.json({ ok: true, uptimeSec: Math.floor(process.uptime()), startedAt });
+    }
+  })();
 });
 
 app.use("/wallets", walletsRouter);
@@ -93,7 +95,8 @@ app.use("/autonomy", autonomyRouter);
 app.use("/swing", swingRouter);
 app.use("/intelligence", intelligenceRouter);
 
-app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+app.use((error: unknown, _req: Request, res: Response, next: NextFunction) => {
+  void next;
   const message = error instanceof Error ? error.message : "Unhandled server error";
   logger.error({ err: error }, message);
   res.status(500).json({ error: message });

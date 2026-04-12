@@ -15,10 +15,26 @@ interface TokenBalanceQuery {
   token?: string;
 }
 
+function isCreateWalletsBody(value: unknown): value is CreateWalletsBody {
+  if (typeof value !== "object" || value === null) return false;
+  const body = value as Record<string, unknown>;
+  return (
+    (body.count === undefined || typeof body.count === "number") &&
+    (body.name === undefined || typeof body.name === "string") &&
+    (body.bootstrapAmountWei === undefined || typeof body.bootstrapAmountWei === "string")
+  );
+}
+
+function isTokenBalanceQuery(value: unknown): value is TokenBalanceQuery {
+  if (typeof value !== "object" || value === null) return false;
+  const query = value as Record<string, unknown>;
+  return query.token === undefined || typeof query.token === "string";
+}
+
 export const walletsRouter = Router();
 
-walletsRouter.post("/", async (req, res) => {
-  const body = req.body as CreateWalletsBody;
+walletsRouter.post("/", (req, res) => {
+  const body = isCreateWalletsBody(req.body) ? req.body : {};
   const count = body.count ?? 1;
 
   if (!Number.isInteger(count) || count < 1 || count > 500) {
@@ -39,41 +55,47 @@ walletsRouter.post("/", async (req, res) => {
     }
   }
 
-  try {
-    const fleetName = typeof body.name === "string" && body.name.trim() ? body.name.trim() : `wallet-${Date.now()}`;
-    const created = await createFleetWallets(count, fleetName);
-    if (bootstrapWei > 0n && created.length > 0) {
-      try {
-        const bootstrapRecords = await bootstrapFleetFunding({
-          walletIds: created.map((wallet) => wallet.id),
-          amountWei: bootstrapWei,
-        });
-        return res.status(201).json({ created, bootstrapRecords, bootstrapAmountWei: bootstrapWei.toString() });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Bootstrap funding failed";
-        return res.status(500).json({
-          error: message,
-          created,
-          bootstrapAmountWei: bootstrapWei.toString(),
-        });
+  void (async () => {
+    try {
+      const fleetName = typeof body.name === "string" && body.name.trim() ? body.name.trim() : `wallet-${Date.now()}`;
+      const created = await createFleetWallets(count, fleetName);
+      if (bootstrapWei > 0n && created.length > 0) {
+        try {
+          const bootstrapRecords = await bootstrapFleetFunding({
+            walletIds: created.map((wallet) => wallet.id),
+            amountWei: bootstrapWei,
+          });
+          res.status(201).json({ created, bootstrapRecords, bootstrapAmountWei: bootstrapWei.toString() });
+          return;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Bootstrap funding failed";
+          res.status(500).json({
+            error: message,
+            created,
+            bootstrapAmountWei: bootstrapWei.toString(),
+          });
+          return;
+        }
       }
+      res.status(201).json({ created });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unexpected error";
+      res.status(500).json({ error: message });
     }
-    return res.status(201).json({ created });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unexpected error";
-    return res.status(500).json({ error: message });
-  }
+  })();
 });
 
-walletsRouter.get("/", async (_req, res) => {
-  try {
-    await ensureMasterWallet();
-    const wallets = listWallets();
-    return res.json({ wallets });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unexpected error";
-    return res.status(500).json({ error: message });
-  }
+walletsRouter.get("/", (_req, res) => {
+  void (async () => {
+    try {
+      await ensureMasterWallet();
+      const wallets = listWallets();
+      res.json({ wallets });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unexpected error";
+      res.status(500).json({ error: message });
+    }
+  })();
 });
 
 walletsRouter.delete("/:id", (req, res) => {
@@ -94,42 +116,44 @@ walletsRouter.delete("/:id", (req, res) => {
   return res.json({ deleted });
 });
 
-walletsRouter.get("/:id/balance", async (req, res) => {
+walletsRouter.get("/:id/balance", (req, res) => {
   const id = Number.parseInt(req.params.id, 10);
   if (Number.isNaN(id) || id < 1) {
     return res.status(400).json({ error: "wallet id must be a positive integer" });
   }
 
-  try {
-    const ethResult = await getWalletEthBalance(id);
-    const query = req.query as TokenBalanceQuery;
-    if (!query.token) {
-      return res.json({
+  const query = isTokenBalanceQuery(req.query) ? req.query : {};
+
+  void (async () => {
+    try {
+      const ethResult = await getWalletEthBalance(id);
+      if (!query.token) {
+        res.json({
+          wallet: ethResult.wallet,
+          ethBalanceWei: ethResult.balanceWei,
+        });
+        return;
+      }
+
+      if (!isAddress(query.token)) {
+        res.status(400).json({ error: "token must be a valid EVM address" });
+        return;
+      }
+
+      const tokenBalance = await getErc20Balance(query.token, ethResult.wallet.address);
+      res.json({
         wallet: ethResult.wallet,
         ethBalanceWei: ethResult.balanceWei,
+        tokenAddress: query.token,
+        tokenBalanceRaw: tokenBalance.toString(),
       });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unexpected error";
+      if (message.includes("was not found")) {
+        res.status(404).json({ error: message });
+        return;
+      }
+      res.status(500).json({ error: message });
     }
-
-    if (!isAddress(query.token)) {
-      return res.status(400).json({ error: "token must be a valid EVM address" });
-    }
-
-    const tokenBalance = await getErc20Balance(
-      query.token as `0x${string}`,
-      ethResult.wallet.address,
-    );
-    return res.json({
-      wallet: ethResult.wallet,
-      ethBalanceWei: ethResult.balanceWei,
-      tokenAddress: query.token,
-      tokenBalanceRaw: tokenBalance.toString(),
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unexpected error";
-    if (message.includes("was not found")) {
-      return res.status(404).json({ error: message });
-    }
-    return res.status(500).json({ error: message });
-  }
+  })();
 });
-

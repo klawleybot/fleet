@@ -5,23 +5,25 @@ import type { SwapRequestBody } from "../types.js";
 
 export const tradesRouter = Router();
 
-tradesRouter.post("/swap", async (req, res) => {
-  const body = req.body as SwapRequestBody;
-  if (!Array.isArray(body.walletIds) || body.walletIds.length === 0) {
+function isSwapRequestBody(value: unknown): value is SwapRequestBody {
+  if (typeof value !== "object" || value === null) return false;
+  const body = value as Record<string, unknown>;
+  return (
+    Array.isArray(body.walletIds) &&
+    body.walletIds.every((walletId) => typeof walletId === "number") &&
+    isAddress(body.fromToken) &&
+    isAddress(body.toToken) &&
+    typeof body.amountInWei === "string" &&
+    Number.isInteger(body.slippageBps)
+  );
+}
+
+tradesRouter.post("/swap", (req, res) => {
+  const body: unknown = req.body;
+  if (!isSwapRequestBody(body) || body.walletIds.length === 0) {
     return res.status(400).json({
       error: "walletIds must be a non-empty array of wallet ids",
     });
-  }
-  if (!isAddress(body.fromToken) || !isAddress(body.toToken)) {
-    return res.status(400).json({
-      error: "fromToken and toToken must be valid EVM addresses",
-    });
-  }
-  if (typeof body.amountInWei !== "string") {
-    return res.status(400).json({ error: "amountInWei must be a string" });
-  }
-  if (!Number.isInteger(body.slippageBps)) {
-    return res.status(400).json({ error: "slippageBps must be an integer" });
   }
 
   let amountInWei: bigint;
@@ -31,19 +33,21 @@ tradesRouter.post("/swap", async (req, res) => {
     return res.status(400).json({ error: "amountInWei must be a valid integer string" });
   }
 
-  try {
-    const records = await coordinatedSwap({
-      walletIds: body.walletIds,
-      fromToken: body.fromToken,
-      toToken: body.toToken,
-      amountInWei,
-      slippageBps: body.slippageBps,
-    });
-    return res.json({ records });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unexpected error";
-    return res.status(400).json({ error: message });
-  }
+  void (async () => {
+    try {
+      const records = await coordinatedSwap({
+        walletIds: body.walletIds,
+        fromToken: body.fromToken,
+        toToken: body.toToken,
+        amountInWei,
+        slippageBps: body.slippageBps,
+      });
+      res.json({ records });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unexpected error";
+      res.status(400).json({ error: message });
+    }
+  })();
 });
 
 tradesRouter.get("/history", (_req, res) => {
@@ -51,4 +55,3 @@ tradesRouter.get("/history", (_req, res) => {
     records: listTradeHistory(),
   });
 });
-

@@ -20,7 +20,6 @@ import {
 import {
   quoteExactInputSingle,
   applySlippage,
-  getQuoterAddress,
 } from "../src/services/v4Quoter.js";
 import {
   encodeV4ExactInSwap,

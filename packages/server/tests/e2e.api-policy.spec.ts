@@ -126,14 +126,18 @@ function createZoraFixtureDb(filePath: string, chainId: number): void {
   db.close();
 }
 
-async function api(method: string, endpoint: string, body?: unknown): Promise<{ status: number; json: any }> {
+async function api<TJson = unknown>(
+  method: string,
+  endpoint: string,
+  body?: unknown,
+): Promise<{ status: number; json: TJson }> {
   const res = await fetch(`http://127.0.0.1:${apiPort}${endpoint}`, {
     method,
     headers: { "content-type": "application/json" },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
   const text = await res.text();
-  const json = text ? JSON.parse(text) : null;
+  const json = (text ? JSON.parse(text) : null) as TJson;
   return { status: res.status, json };
 }
 

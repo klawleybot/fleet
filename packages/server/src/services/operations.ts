@@ -3,7 +3,7 @@ import { db } from "../db/index.js";
 import { assertExecutionAllowed, assertFundingRequestAllowed, assertTradeRequestAllowed, getPolicy } from "./policy.js";
 import { distributeFunding } from "./funding.js";
 import { strategySwap } from "./trade.js";
-import { addToWatchlist, removeFromWatchlist, getFleetWatchlistName, selectSignalCoin, topMovers, watchlistSignals, type ZoraSignalCoin, type ZoraSignalMode } from "./zoraSignals.js";
+import { addToWatchlist, removeFromWatchlist, selectSignalCoin, topMovers, watchlistSignals, type ZoraSignalCoin, type ZoraSignalMode } from "./zoraSignals.js";
 import type { OperationRecord, StrategyMode } from "../types.js";
 
 const WETH_BASE = "0x4200000000000000000000000000000000000006" as const;
@@ -96,7 +96,7 @@ export function requestExitCoinOperation(input: {
 }): OperationRecord {
   if (!isAddress(input.coinAddress)) throw new Error("coinAddress must be a valid EVM address");
   const totalAmountWei = BigInt(input.totalAmountWei);
-  const { cluster, walletIds } = ensureClusterHasWallets(input.clusterId);
+  const { cluster } = ensureClusterHasWallets(input.clusterId);
 
   // EXIT_COIN: skip MAX_TRADE_WEI / MAX_PER_WALLET_WEI checks since
   // totalAmountWei is a raw token amount, not ETH. Only validate slippage + coin allowlist.
@@ -264,7 +264,7 @@ export async function approveAndExecuteOperation(input: {
           removeFromWatchlist(payload.coinAddress);
         }
       }
-    } catch (watchlistErr) {
+    } catch {
       // Non-fatal: don't fail the operation if watchlist update fails
       // (e.g. zora-intelligence DB not available)
     }

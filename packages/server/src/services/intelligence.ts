@@ -55,7 +55,13 @@ export function getIntelligenceEngine(): IntelligenceEngine {
 
 /** @internal Test-only: reset the singleton so it can be re-initialized. */
 export function _resetEngine(): void {
-  if (engine) { try { engine.close(); } catch {} }
+  if (engine) {
+    try {
+      engine.close();
+    } catch {
+      // Best-effort test cleanup.
+    }
+  }
   engine = null;
 }
 

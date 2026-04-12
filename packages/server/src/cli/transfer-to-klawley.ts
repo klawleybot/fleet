@@ -4,6 +4,7 @@
  */
 import { transferFromSmartAccount } from "../services/cdp.js";
 import { getEthBalance } from "../services/balance.js";
+import { logger } from "../logger.js";
 import { parseEther, formatEther } from "viem";
 
 const KLAWLEY_WALLET = "0x097677d3e2cde65af10be80ae5e67b8b68eb613d" as const;
@@ -17,36 +18,33 @@ async function main() {
   }
 
   const amountWei = parseEther(amountEth);
-  console.log(`⚠️  PRODUCTION TRANSFER`);
-  console.log(`From: master smart wallet`);
-  console.log(`To: Klawley smart wallet (${KLAWLEY_WALLET})`);
-  console.log(`Amount: ${amountEth} ETH (${amountWei} wei)`);
+  logger.warn({ to: KLAWLEY_WALLET, amountEth, amountWei: amountWei.toString() }, "PRODUCTION TRANSFER");
+  logger.info("From: master smart wallet");
+  logger.info({ to: KLAWLEY_WALLET }, "To: Klawley smart wallet");
+  logger.info({ amountEth, amountWei: amountWei.toString() }, "Transfer amount");
 
   // Check master balance first
   // Real master SA from DB (prd config)
   const masterBalance = await getEthBalance("0x351D0427376889f09D171DDfBa3Bf9C50705798D" as `0x${string}`);
-  console.log(`Master balance: ${formatEther(masterBalance)} ETH`);
+  logger.info({ masterBalanceEth: formatEther(masterBalance) }, "Master balance");
 
   if (masterBalance < amountWei) {
     console.error(`❌ Insufficient balance. Master has ${formatEther(masterBalance)} ETH, need ${amountEth} ETH`);
     process.exit(1);
   }
 
-  console.log(`\nSubmitting transfer...`);
+  logger.info("Submitting transfer");
   const result = await transferFromSmartAccount({
     smartAccountName: "master",
     to: KLAWLEY_WALLET,
     amountWei,
   });
 
-  console.log(`\n✅ Transfer complete!`);
-  console.log(`UserOp: ${result.userOpHash}`);
-  console.log(`Tx: ${result.txHash}`);
-  console.log(`Status: ${result.status}`);
+  logger.info({ userOpHash: result.userOpHash, txHash: result.txHash, status: result.status }, "Transfer complete");
 
   // Check new balance
   const klawleyBalance = await getEthBalance(KLAWLEY_WALLET);
-  console.log(`\nKlawley balance: ${formatEther(klawleyBalance)} ETH`);
+  logger.info({ klawleyBalanceEth: formatEther(klawleyBalance) }, "Klawley balance");
 }
 
 main().catch((err) => {

@@ -58,14 +58,74 @@ interface RoutePreviewBody {
 
 export const operationsRouter = Router();
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function parseStringQueryValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function parseFundingBody(value: unknown): FundingBody {
+  if (!isRecord(value)) return {};
+  return {
+    clusterId: typeof value.clusterId === "number" ? value.clusterId : undefined,
+    amountWei: typeof value.amountWei === "string" ? value.amountWei : undefined,
+    requestedBy: typeof value.requestedBy === "string" ? value.requestedBy : undefined,
+  };
+}
+
+function parseTradeBody(value: unknown): TradeBody {
+  if (!isRecord(value)) return {};
+  return {
+    clusterId: typeof value.clusterId === "number" ? value.clusterId : undefined,
+    coinAddress: typeof value.coinAddress === "string" ? value.coinAddress : undefined,
+    totalAmountWei: typeof value.totalAmountWei === "string" ? value.totalAmountWei : undefined,
+    slippageBps: typeof value.slippageBps === "number" ? value.slippageBps : undefined,
+    strategyMode: typeof value.strategyMode === "string" ? value.strategyMode as StrategyMode : undefined,
+    requestedBy: typeof value.requestedBy === "string" ? value.requestedBy : undefined,
+  };
+}
+
+function parseSignalSupportBody(value: unknown): SignalSupportBody {
+  if (!isRecord(value)) return {};
+  return {
+    clusterId: typeof value.clusterId === "number" ? value.clusterId : undefined,
+    mode: value.mode === "top_momentum" || value.mode === "watchlist_top" ? value.mode : undefined,
+    listName: typeof value.listName === "string" ? value.listName : undefined,
+    minMomentum: typeof value.minMomentum === "number" ? value.minMomentum : undefined,
+    totalAmountWei: typeof value.totalAmountWei === "string" ? value.totalAmountWei : undefined,
+    slippageBps: typeof value.slippageBps === "number" ? value.slippageBps : undefined,
+    strategyMode: typeof value.strategyMode === "string" ? value.strategyMode as StrategyMode : undefined,
+    requestedBy: typeof value.requestedBy === "string" ? value.requestedBy : undefined,
+  };
+}
+
+function parseApproveBody(value: unknown): ApproveBody {
+  if (!isRecord(value)) return {};
+  return {
+    approvedBy: typeof value.approvedBy === "string" ? value.approvedBy : undefined,
+  };
+}
+
+function parseRoutePreviewBody(value: unknown): RoutePreviewBody {
+  if (!isRecord(value)) return {};
+  return {
+    fromToken: typeof value.fromToken === "string" ? value.fromToken : undefined,
+    toToken: typeof value.toToken === "string" ? value.toToken : undefined,
+    maxHops: typeof value.maxHops === "number" ? value.maxHops : undefined,
+  };
+}
+
 operationsRouter.get("/", (req, res) => {
-  const limit = Number.parseInt(String(req.query.limit ?? "100"), 10);
+  const limitText = isRecord(req.query) ? parseStringQueryValue(req.query.limit) : undefined;
+  const limit = Number.parseInt(limitText ?? "100", 10);
   const safeLimit = Number.isNaN(limit) ? 100 : Math.max(1, Math.min(500, limit));
   return res.json({ operations: listOperations(safeLimit) });
 });
 
 operationsRouter.post("/request-funding", (req, res) => {
-  const body = req.body as FundingBody;
+  const body = parseFundingBody(req.body);
   if (!Number.isInteger(body.clusterId) || Number(body.clusterId) < 1) {
     return res.status(400).json({ error: "clusterId must be a positive integer" });
   }
@@ -87,7 +147,7 @@ operationsRouter.post("/request-funding", (req, res) => {
 });
 
 operationsRouter.post("/support-coin", (req, res) => {
-  const body = req.body as TradeBody;
+  const body = parseTradeBody(req.body);
   if (!Number.isInteger(body.clusterId) || Number(body.clusterId) < 1) {
     return res.status(400).json({ error: "clusterId must be a positive integer" });
   }
@@ -104,7 +164,7 @@ operationsRouter.post("/support-coin", (req, res) => {
   try {
     const operation = requestSupportCoinOperation({
       clusterId: Number(body.clusterId),
-      coinAddress: body.coinAddress as `0x${string}`,
+      coinAddress: body.coinAddress,
       totalAmountWei: body.totalAmountWei,
       slippageBps: Number(body.slippageBps),
       ...(body.strategyMode ? { strategyMode: body.strategyMode } : {}),
@@ -118,7 +178,7 @@ operationsRouter.post("/support-coin", (req, res) => {
 });
 
 operationsRouter.post("/exit-coin", (req, res) => {
-  const body = req.body as TradeBody;
+  const body = parseTradeBody(req.body);
   if (!Number.isInteger(body.clusterId) || Number(body.clusterId) < 1) {
     return res.status(400).json({ error: "clusterId must be a positive integer" });
   }
@@ -135,7 +195,7 @@ operationsRouter.post("/exit-coin", (req, res) => {
   try {
     const operation = requestExitCoinOperation({
       clusterId: Number(body.clusterId),
-      coinAddress: body.coinAddress as `0x${string}`,
+      coinAddress: body.coinAddress,
       totalAmountWei: body.totalAmountWei,
       slippageBps: Number(body.slippageBps),
       ...(body.strategyMode ? { strategyMode: body.strategyMode } : {}),
@@ -149,7 +209,14 @@ operationsRouter.post("/exit-coin", (req, res) => {
 });
 
 operationsRouter.get("/zora-signals", (req, res) => {
-  const query = req.query as SignalQuery;
+  const query: SignalQuery = isRecord(req.query)
+    ? {
+        mode: req.query.mode === "top_momentum" || req.query.mode === "watchlist_top" ? req.query.mode : undefined,
+        listName: parseStringQueryValue(req.query.listName),
+        minMomentum: parseStringQueryValue(req.query.minMomentum),
+        limit: parseStringQueryValue(req.query.limit),
+      }
+    : {};
   const mode = query.mode ?? "top_momentum";
   if (mode !== "top_momentum" && mode !== "watchlist_top") {
     return res.status(400).json({ error: "mode must be top_momentum|watchlist_top" });
@@ -173,7 +240,7 @@ operationsRouter.get("/zora-signals", (req, res) => {
 });
 
 operationsRouter.post("/support-from-zora-signal", (req, res) => {
-  const body = req.body as SignalSupportBody;
+  const body = parseSignalSupportBody(req.body);
   if (!Number.isInteger(body.clusterId) || Number(body.clusterId) < 1) {
     return res.status(400).json({ error: "clusterId must be a positive integer" });
   }
@@ -208,7 +275,7 @@ operationsRouter.post("/support-from-zora-signal", (req, res) => {
 });
 
 operationsRouter.post("/route-preview", (req, res) => {
-  const body = req.body as RoutePreviewBody;
+  const body = parseRoutePreviewBody(req.body);
   if (typeof body.fromToken !== "string" || !isAddress(body.fromToken)) {
     return res.status(400).json({ error: "fromToken must be a valid EVM address" });
   }
@@ -218,8 +285,8 @@ operationsRouter.post("/route-preview", (req, res) => {
 
   try {
     const route = resolveDeterministicBuyRoute({
-      fromToken: body.fromToken as `0x${string}`,
-      toToken: body.toToken as `0x${string}`,
+      fromToken: body.fromToken,
+      toToken: body.toToken,
       ...(Number.isInteger(body.maxHops) ? { maxHops: Number(body.maxHops) } : {}),
     });
     return res.json({ route });
@@ -229,22 +296,24 @@ operationsRouter.post("/route-preview", (req, res) => {
   }
 });
 
-operationsRouter.post("/:id/approve-execute", async (req, res) => {
+operationsRouter.post("/:id/approve-execute", (req, res) => {
   const id = Number.parseInt(req.params.id, 10);
   if (Number.isNaN(id) || id < 1) {
     return res.status(400).json({ error: "operation id must be a positive integer" });
   }
 
-  const body = req.body as ApproveBody;
+  const body = parseApproveBody(req.body);
 
-  try {
-    const operation = await approveAndExecuteOperation({
-      operationId: id,
-      approvedBy: body.approvedBy ?? null,
-    });
-    return res.json({ operation });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unexpected error";
-    return res.status(400).json({ error: message });
-  }
+  void (async () => {
+    try {
+      const operation = await approveAndExecuteOperation({
+        operationId: id,
+        approvedBy: body.approvedBy ?? null,
+      });
+      res.json({ operation });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unexpected error";
+      res.status(400).json({ error: message });
+    }
+  })();
 });

@@ -1,12 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { getFleetDashboard, getGlobalDashboard } from "../src/services/dashboard.js";
 import { createFleet } from "../src/services/fleet.js";
-import { db } from "../src/db/index.js";
 import { recordTradePosition } from "../src/services/monitor.js";
 
 describe("dashboard", () => {
   it("returns global dashboard with master + fleets", async () => {
-    const { fleet } = await createFleet({ name: `dash-${Date.now()}`, walletCount: 2 });
+    await createFleet({ name: `dash-${Date.now()}`, walletCount: 2 });
     const dashboard = await getGlobalDashboard();
 
     expect(dashboard.master).toBeDefined();

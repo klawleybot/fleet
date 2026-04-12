@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildDripSchedule, jiggleAmounts } from "../src/services/trade.js";
+import { buildDripSchedule } from "../src/services/trade.js";
 
 describe("buildDripSchedule", () => {
   it("creates correct number of events (wallets × intervals)", () => {

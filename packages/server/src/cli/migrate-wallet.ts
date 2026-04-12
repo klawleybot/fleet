@@ -10,11 +10,11 @@
  *     [--dry-run]
  */
 
-import { createPublicClient, http, type Address } from "viem";
-import type { PublicClient as ReadPublicClient } from "viem";
+import { createPublicClient, http, isAddress, type Address } from "viem";
 import { createBundlerClient } from "viem/account-abstraction";
 import { privateKeyToAccount } from "viem/accounts";
 import { base } from "viem/chains";
+import { logger } from "../logger.js";
 import { createSponsoredBundlerClient } from "../services/bundler/config.js";
 import {
   isOwnerAddress,
@@ -24,28 +24,40 @@ import {
   migrateSmartWalletOwner,
 } from "../services/walletMigration.js";
 
-// ---- Parse args ----
+function normalizePrivateKey(value: string): `0x${string}` {
+  return value.startsWith("0x") ? value : `0x${value}`;
+}
 
-function parseArgs() {
+function parseArgs(): {
+  walletAddress: Address;
+  oldKey: `0x${string}`;
+  newKey: `0x${string}`;
+  dryRun: boolean;
+} {
   const args = process.argv.slice(2);
   let wallet = "";
   let oldKeyEnv = "";
   let newKeyEnv = "";
   let dryRun = false;
 
-  for (let i = 0; i < args.length; i++) {
+  for (let i = 0; i < args.length; i += 1) {
     switch (args[i]) {
       case "--wallet":
-        wallet = args[++i] ?? "";
+        wallet = args[i + 1] ?? "";
+        i += 1;
         break;
       case "--old-key-env":
-        oldKeyEnv = args[++i] ?? "";
+        oldKeyEnv = args[i + 1] ?? "";
+        i += 1;
         break;
       case "--new-key-env":
-        newKeyEnv = args[++i] ?? "";
+        newKeyEnv = args[i + 1] ?? "";
+        i += 1;
         break;
       case "--dry-run":
         dryRun = true;
+        break;
+      default:
         break;
     }
   }
@@ -54,6 +66,10 @@ function parseArgs() {
     console.error(
       "Usage: migrate-wallet --wallet <addr> --old-key-env <ENV_VAR> --new-key-env <ENV_VAR> [--dry-run]",
     );
+    process.exit(1);
+  }
+  if (!isAddress(wallet)) {
+    console.error(`❌ Invalid wallet address: ${wallet}`);
     process.exit(1);
   }
 
@@ -69,14 +85,12 @@ function parseArgs() {
   }
 
   return {
-    walletAddress: wallet as Address,
-    oldKey: (oldKey.startsWith("0x") ? oldKey : `0x${oldKey}`) as `0x${string}`,
-    newKey: (newKey.startsWith("0x") ? newKey : `0x${newKey}`) as `0x${string}`,
+    walletAddress: wallet,
+    oldKey: normalizePrivateKey(oldKey),
+    newKey: normalizePrivateKey(newKey),
     dryRun,
   };
 }
-
-// ---- Main ----
 
 async function main() {
   const { walletAddress, oldKey, newKey, dryRun } = parseArgs();
@@ -86,66 +100,63 @@ async function main() {
     chain: base,
     transport: http(rpcUrl),
   });
-  const readClient = publicClient as ReadPublicClient;
   const bundlerCompatClient = publicClient as unknown as NonNullable<Parameters<typeof createBundlerClient>[0]["client"]>;
 
   const oldAccount = privateKeyToAccount(oldKey);
   const newAccount = privateKeyToAccount(newKey);
 
-  console.log("╔══════════════════════════════════════════════════════════╗");
-  console.log("║           SMART WALLET OWNER MIGRATION                 ║");
-  console.log("╠══════════════════════════════════════════════════════════╣");
-  console.log(`║ Wallet:      ${walletAddress}`);
-  console.log(`║ Old Owner:   ${oldAccount.address}`);
-  console.log(`║ New Owner:   ${newAccount.address}`);
-  console.log(`║ Mode:        ${dryRun ? "🔍 DRY RUN" : "⚠️  LIVE MIGRATION"}`);
-  console.log("╚══════════════════════════════════════════════════════════╝");
-  console.log();
+  logger.warn(
+    {
+      walletAddress,
+      oldOwner: oldAccount.address,
+      newOwner: newAccount.address,
+      mode: dryRun ? "dry-run" : "live",
+    },
+    "smart wallet owner migration",
+  );
 
-  // ---- Pre-flight diagnostics ----
-  console.log("📋 Pre-flight checks...");
+  const oldIsOwner = await isOwnerAddress(publicClient, walletAddress, oldAccount.address);
+  const newIsOwner = await isOwnerAddress(publicClient, walletAddress, newAccount.address);
+  const ownerCount = await getOwnerCount(publicClient, walletAddress);
+  const nextIndex = await getNextOwnerIndex(publicClient, walletAddress);
 
-  const oldIsOwner = await isOwnerAddress(readClient, walletAddress, oldAccount.address);
-  console.log(`  Old owner is current owner: ${oldIsOwner ? "✅ YES" : "❌ NO"}`);
-
-  const newIsOwner = await isOwnerAddress(readClient, walletAddress, newAccount.address);
-  console.log(`  New owner already an owner: ${newIsOwner ? "⚠️ YES" : "✅ NO"}`);
-
-  const ownerCount = await getOwnerCount(readClient, walletAddress);
-  const nextIndex = await getNextOwnerIndex(readClient, walletAddress);
-  console.log(`  Owner count: ${ownerCount}, next index: ${nextIndex}`);
+  logger.info(
+    {
+      oldIsOwner,
+      newIsOwner,
+      ownerCount: ownerCount.toString(),
+      nextIndex: nextIndex.toString(),
+    },
+    "pre-flight checks",
+  );
 
   if (oldIsOwner) {
-    const oldIdx = await findOwnerIndex(readClient, walletAddress, oldAccount.address);
-    console.log(`  Old owner index: ${oldIdx}`);
+    const oldIdx = await findOwnerIndex(publicClient, walletAddress, oldAccount.address);
+    logger.info({ oldOwnerIndex: oldIdx.toString() }, "old owner index");
   }
 
   if (!oldIsOwner) {
-    console.error("\n❌ Cannot proceed: old key is not an owner of this wallet.");
+    console.error("❌ Cannot proceed: old key is not an owner of this wallet.");
     process.exit(1);
   }
 
   if (newIsOwner) {
-    console.error(
-      "\n❌ Cannot proceed: new key is already an owner. Remove the old owner manually if needed.",
-    );
+    console.error("❌ Cannot proceed: new key is already an owner. Remove the old owner manually if needed.");
     process.exit(1);
   }
 
   if (dryRun) {
-    console.log("\n🔍 Dry run complete. All pre-flight checks passed.");
-    console.log("   Re-run without --dry-run to execute the migration.");
+    logger.info("dry run complete. Re-run without --dry-run to execute the migration");
     process.exit(0);
   }
 
-  // ---- Execute migration ----
-  console.log("\n🚀 Starting migration...\n");
+  logger.info("starting wallet owner migration");
 
   const result = await migrateSmartWalletOwner({
     walletAddress,
     currentOwnerAccount: oldAccount,
     newOwnerAccount: newAccount,
-    publicClient: readClient,
+    publicClient,
     createBundler: (account) =>
       createSponsoredBundlerClient({
         account,
@@ -154,35 +165,36 @@ async function main() {
       }),
   });
 
-  console.log("✅ Migration complete!\n");
-  console.log("Step 1 — Add new owner:");
-  console.log(`  UserOp: ${result.step1_addOwner.userOpHash}`);
-  console.log(`  Tx:     ${result.step1_addOwner.txHash}`);
-  console.log();
-  console.log("Step 2 — Remove old owner:");
-  console.log(`  UserOp: ${result.step2_removeOwner.userOpHash}`);
-  console.log(`  Tx:     ${result.step2_removeOwner.txHash}`);
-  console.log(`  Removed at index: ${result.removedAtIndex}`);
-  console.log();
-  console.log(`New owner: ${result.newOwner}`);
-  console.log(`Removed:   ${result.removedOwner}`);
+  logger.info(
+    {
+      addOwnerUserOpHash: result.step1_addOwner.userOpHash,
+      addOwnerTxHash: result.step1_addOwner.txHash,
+      removeOwnerUserOpHash: result.step2_removeOwner.userOpHash,
+      removeOwnerTxHash: result.step2_removeOwner.txHash,
+      removedAtIndex: result.removedAtIndex,
+      newOwner: result.newOwner,
+      removedOwner: result.removedOwner,
+    },
+    "migration complete",
+  );
 
-  // ---- Post-migration verification ----
-  console.log("\n📋 Post-migration verification...");
-  const finalOldIsOwner = await isOwnerAddress(readClient, walletAddress, oldAccount.address);
-  const finalNewIsOwner = await isOwnerAddress(readClient, walletAddress, newAccount.address);
-  console.log(`  Old owner still owns wallet: ${finalOldIsOwner ? "❌ STILL OWNER" : "✅ REMOVED"}`);
-  console.log(`  New owner owns wallet:       ${finalNewIsOwner ? "✅ YES" : "❌ FAILED"}`);
+  const finalOldIsOwner = await isOwnerAddress(publicClient, walletAddress, oldAccount.address);
+  const finalNewIsOwner = await isOwnerAddress(publicClient, walletAddress, newAccount.address);
+  logger.info({ finalOldIsOwner, finalNewIsOwner }, "post-migration verification");
 
   if (finalOldIsOwner || !finalNewIsOwner) {
-    console.error("\n⚠️  Post-migration verification failed! Manual intervention may be needed.");
+    console.error("⚠️ Post-migration verification failed. Manual intervention may be needed.");
     process.exit(1);
   }
 
-  console.log("\n🎉 Migration successful. Compromised key has been removed.");
+  logger.info("migration successful. compromised key removed");
 }
 
-main().catch((err) => {
-  console.error("\n💥 Migration failed:", err.message || err);
+main().catch((error: unknown) => {
+  if (error instanceof Error) {
+    console.error("💥 Migration failed:", error.message);
+  } else {
+    console.error("💥 Migration failed:", error);
+  }
   process.exit(1);
 });
