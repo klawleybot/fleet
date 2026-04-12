@@ -23,7 +23,7 @@
  * Confirmed working with viem 2.45.2 + Pimlico.
  *
  * Usage:
- *   doppler run --project openclaw --config prd -- npx tsx packages/server/scripts/trend-auto-sell.ts
+ *   doppler run --project openclaw --config prd -- bun x tsx packages/server/scripts/trend-auto-sell.ts
  */
 
 import {

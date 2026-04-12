@@ -1,8 +1,8 @@
 module.exports = {
   apps: [{
     name: "fleet-server",
-    script: "npx",
-    args: "tsx packages/server/src/index.ts",
+    script: "bun",
+    args: "x tsx packages/server/src/index.ts",
     cwd: "/home/openclaw/.openclaw/workspace/fleet",
     log_file: "/home/openclaw/.openclaw/workspace/fleet/logs/fleet.log",
     error_file: "/home/openclaw/.openclaw/workspace/fleet/logs/fleet-error.log",

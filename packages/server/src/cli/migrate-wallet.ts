@@ -3,7 +3,7 @@
  * CLI: Migrate a CoinbaseSmartWallet owner from one EOA to another.
  *
  * Usage:
- *   doppler run --project openclaw --config prd -- npx tsx src/cli/migrate-wallet.ts \
+ *   doppler run --project openclaw --config prd -- bun x tsx src/cli/migrate-wallet.ts \
  *     --wallet 0x0bc571f8887ee177f8923176030b2e3f60a76f20 \
  *     --old-key-env COINOLOGY_ORIGINAL_PRIVATE_KEY \
  *     --new-key-env COINOLOGY_PRIVATE_KEY \

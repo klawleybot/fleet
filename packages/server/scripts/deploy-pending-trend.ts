@@ -3,7 +3,7 @@
  *
  * Usage:
  *   TREND_POST_ID=<id-or-symbol> \
- *   doppler run --project openclaw --config prd -- npx tsx packages/server/scripts/deploy-pending-trend.ts
+ *   doppler run --project openclaw --config prd -- bun x tsx packages/server/scripts/deploy-pending-trend.ts
  *
  * Reads the proposal from trend_posts DB, deploys the content coin,
  * and updates the DB record with the deployed address + status.

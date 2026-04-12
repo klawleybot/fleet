@@ -4,7 +4,7 @@
  * For content coins backed by $openklaw, the Doppler hook blocks quoter/simulation calls.
  * This script sends the UserOp directly, relying on the bundler's own estimation.
  *
- * Usage: npx tsx packages/server/scripts/klawley-buy-nosim.ts <coinAddress> [amountEth] [slippageBps]
+ * Usage: bun x tsx packages/server/scripts/klawley-buy-nosim.ts <coinAddress> [amountEth] [slippageBps]
  */
 
 import { createPublicClient, http, parseEther, type Address, type Hex } from "viem";

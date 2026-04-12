@@ -14,7 +14,7 @@ Local control plane for managing a fleet of Coinbase CDP Smart Accounts on Base.
 
 ## Setup
 
-1. Install dependencies with yarn install
+1. Install dependencies with bun install
 2. Add env vars for one signer backend:
    - `SIGNER_BACKEND=local` (default): `LOCAL_SIGNER_SEED` (required), optional `MASTER_WALLET_PRIVATE_KEY` to pin master funding wallet
    - `SIGNER_BACKEND=cdp` (explicit opt-in): `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`, `CDP_WALLET_SECRET`
@@ -24,8 +24,8 @@ Local control plane for managing a fleet of Coinbase CDP Smart Accounts on Base.
      - `PIMLICO_BASE_SEPOLIA_BUNDLER_URL`
    - Shared: `BASE_RPC_URL`, `BASE_SEPOLIA_RPC_URL`, `PORT`
    - Optional: `APP_NETWORK=base|base-sepolia` (default `base`)
-3. Run backend: yarn dev:server
-4. Run frontend: yarn dev:web
+3. Run backend: bun run dev:server
+4. Run frontend: bun run dev:web
 5. Open http://localhost:5179
 
 ## E2E test harness (Anvil Base/Base-Sepolia fork)
@@ -41,13 +41,13 @@ Prereqs:
 Run tests:
 ```bash
 # base mainnet fork
-APP_NETWORK=base yarn workspace @pump-it-up/server test:e2e
+APP_NETWORK=base bun run --filter @pump-it-up/server test:e2e
 
 # base sepolia fork
-APP_NETWORK=base-sepolia yarn workspace @pump-it-up/server test:e2e
+APP_NETWORK=base-sepolia bun run --filter @pump-it-up/server test:e2e
 
 # both using Doppler
-yarn test:e2e:doppler
+bun run test:e2e:doppler
 ```
 
 What this validates end-to-end:

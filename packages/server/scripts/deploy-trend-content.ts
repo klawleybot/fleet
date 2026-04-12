@@ -7,7 +7,7 @@
  *
  * Usage:
  *   TREND_COIN=0x... COIN_NAME="..." COIN_SYMBOL="..." COIN_DESCRIPTION="..." COIN_IMAGE_PATH=... \
- *   doppler run --project openclaw --config prd -- npx tsx packages/server/scripts/deploy-trend-content.ts
+ *   doppler run --project openclaw --config prd -- bun x tsx packages/server/scripts/deploy-trend-content.ts
  */
 
 import { setApiKey, createCoinCall, createMetadataBuilder, createZoraUploaderForCreator } from "@zoralabs/coins-sdk";

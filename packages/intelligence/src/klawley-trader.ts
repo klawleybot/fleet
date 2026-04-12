@@ -7,16 +7,16 @@
  *
  * Usage:
  *   # Buy a coin with ETH
- *   doppler run --project openclaw --config prd -- npx tsx src/klawley-trader.ts buy <coin_address> <eth_amount>
+ *   doppler run --project openclaw --config prd -- bun x tsx src/klawley-trader.ts buy <coin_address> <eth_amount>
  *
  *   # Sell a coin back to ETH
- *   doppler run --project openclaw --config prd -- npx tsx src/klawley-trader.ts sell <coin_address> <token_amount>
+ *   doppler run --project openclaw --config prd -- bun x tsx src/klawley-trader.ts sell <coin_address> <token_amount>
  *
  *   # Check balances
- *   doppler run --project openclaw --config prd -- npx tsx src/klawley-trader.ts balance
+ *   doppler run --project openclaw --config prd -- bun x tsx src/klawley-trader.ts balance
  *
  *   # Quote only (no execution)
- *   doppler run --project openclaw --config prd -- npx tsx src/klawley-trader.ts quote <coin_address> <eth_amount>
+ *   doppler run --project openclaw --config prd -- bun x tsx src/klawley-trader.ts quote <coin_address> <eth_amount>
  */
 
 import {

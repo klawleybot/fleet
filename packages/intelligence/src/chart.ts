@@ -180,7 +180,7 @@ async function buildChartPng(input: {
 
 async function main() {
   const coinAddress = process.argv[2];
-  if (!coinAddress) throw new Error("Usage: tsx src/chart.ts <coin_address> [hours=24] [bucketMinutes=15] [outFile]");
+  if (!coinAddress) throw new Error("Usage: bun x tsx src/chart.ts <coin_address> [hours=24] [bucketMinutes=15] [outFile]");
   const hours = Number(process.argv[3] ?? 24);
   const bucketMinutes = Number(process.argv[4] ?? 15);
   const defaultOutDir = fs.existsSync('/Users/user/.openclaw/media')

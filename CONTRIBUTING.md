@@ -64,7 +64,7 @@ and returns funding address + deficit if insufficient.
 - **No `as any`** — use minimal structural interfaces or `satisfies`
 - **Pure viem** — no Uniswap SDK dependencies
 - **Tests are mandatory** — every new module gets unit tests; behavior changes update existing tests
-- Run `yarn test` before committing — all tests must pass
+- Run `bun run test` before committing — all tests must pass
 
 ### No Module-Scoped `process.env`
 
@@ -101,6 +101,6 @@ function getSignerBackend(): "local" | "cdp" {
 - [ ] Conventional commit messages
 - [ ] One concern per commit
 - [ ] Tests added/updated
-- [ ] `yarn test` passes
+- [ ] `bun run test` passes
 - [ ] No `as any`
 - [ ] No secrets in committed files

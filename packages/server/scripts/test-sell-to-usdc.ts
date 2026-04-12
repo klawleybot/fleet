@@ -2,11 +2,11 @@
  * Test script: sell a coin → ETH → USDC
  *
  * Usage:
- *   tsx scripts/test-sell-to-usdc.ts <coinAddress> [amountTokens] [slippageBps]
+ *   bun x tsx scripts/test-sell-to-usdc.ts <coinAddress> [amountTokens] [slippageBps]
  *
  * Example:
  *   SELL_DESTINATION_TOKEN=0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 \
- *   tsx scripts/test-sell-to-usdc.ts 0x1111111111166b7fe7bd91427724b487980afc69 100 500
+ *   bun x tsx scripts/test-sell-to-usdc.ts 0x1111111111166b7fe7bd91427724b487980afc69 100 500
  *
  * What this does:
  *   1. Reads before-USDC balance

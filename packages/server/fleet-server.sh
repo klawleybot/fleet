@@ -40,7 +40,7 @@ case "${1:-status}" in
       ALERT_PER_COIN_COOLDOWN_MIN=60 \
       ALERT_NOVELTY_WINDOW_HOURS=24 \
       ALERT_WHALE_SWAP_USD=10000 \
-      npx tsx src/index.ts \
+      bun x tsx src/index.ts \
       >> "$LOG_FILE" 2>&1 &
 
     echo $! > "$PID_FILE"

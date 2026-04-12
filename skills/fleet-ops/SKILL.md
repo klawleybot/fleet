@@ -24,10 +24,10 @@ Direct script execution — no server needed. Uses Doppler for secrets.
 cd /Users/user/.openclaw/workspace/fleet/packages/server
 
 # Development (unfunded key, safe to experiment):
-doppler run --project openclaw --config dev -- npx tsx src/cli/fleet-ops.ts <command>
+doppler run --project openclaw --config dev -- bun x tsx src/cli/fleet-ops.ts <command>
 
 # Production (live funds — prints ⚠️ PRODUCTION banner):
-doppler run --project openclaw --config prd -- npx tsx src/cli/fleet-ops.ts <command>
+doppler run --project openclaw --config prd -- bun x tsx src/cli/fleet-ops.ts <command>
 ```
 
 **Always use `--config prd` for live trading.** The `dev` config has a separate unfunded key.
@@ -58,7 +58,7 @@ Fleet HTTP server managed via PM2.
 cd /Users/user/.openclaw/workspace/fleet/packages/server
 
 # Production:
-doppler run --project openclaw --config prd -- npx tsx src/cli/fleet-service.ts <command>
+doppler run --project openclaw --config prd -- bun x tsx src/cli/fleet-service.ts <command>
 ```
 
 | Command | Description |
@@ -132,7 +132,7 @@ For fast trades without setting up a fleet:
 
 ```bash
 cd /Users/user/.openclaw/workspace/fleet
-yarn test    # 109+ tests
+bun run test # 109+ tests
 ```
 
 ## Troubleshooting

@@ -6,23 +6,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Development
-yarn dev:server          # backend (tsx watch, port 4020)
-yarn dev:web             # frontend (Vite, port 5179)
+bun run dev:server       # backend (tsx watch, port 4020)
+bun run dev:web          # frontend (Vite, port 5179)
 
 # Tests
-yarn test                # unit tests (vitest run, CDP_MOCK_MODE=1 auto-set)
-yarn workspace @pump-it-up/server test   # same, from root
+bun run test             # unit tests (vitest run, CDP_MOCK_MODE=1 auto-set)
+bun run --filter @pump-it-up/server test   # same, from root
 
 # Run a single test file
-yarn workspace @pump-it-up/server vitest run tests/jiggle.spec.ts
+bun run --filter @pump-it-up/server test tests/jiggle.spec.ts
 
 # Typecheck
-yarn typecheck           # both packages
+bun run typecheck        # all packages
 
 # E2E (requires Foundry + RPC env vars)
-APP_NETWORK=base yarn workspace @pump-it-up/server test:e2e
-APP_NETWORK=base-sepolia yarn workspace @pump-it-up/server test:e2e
-yarn test:e2e:doppler    # both networks via Doppler
+APP_NETWORK=base bun run --filter @pump-it-up/server test:e2e
+APP_NETWORK=base-sepolia bun run --filter @pump-it-up/server test:e2e
+bun run test:e2e:doppler # both networks via Doppler
 
 # Production daemon
 pm2 start ecosystem.config.cjs
@@ -32,9 +32,10 @@ The server default port is `4020`. The DB path defaults to `packages/server/.dat
 
 ## Architecture
 
-Yarn workspaces monorepo with two packages:
+Bun workspaces monorepo with three packages:
 - **`packages/server`** — Express + better-sqlite3 + viem backend (ESM TypeScript, `tsx watch` in dev)
 - **`packages/web`** — React + Vite + Tailwind frontend (reads from `http://localhost:4020`)
+- **`packages/intelligence`** — Zora intelligence engine + CLI utilities
 
 ### Server layer map
 

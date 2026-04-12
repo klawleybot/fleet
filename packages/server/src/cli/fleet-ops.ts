@@ -10,7 +10,7 @@
  *   fleet-ops fund   [--wallets N] [--amount-eth 0.001]
  *
  * All commands require doppler env:
- *   doppler run --project openclaw --config dev -- tsx src/cli/fleet-ops.ts <command>
+ *   doppler run --project openclaw --config dev -- bun x tsx src/cli/fleet-ops.ts <command>
  */
 
 import { createPublicClient, http, formatEther, parseEther, type Address } from "viem";

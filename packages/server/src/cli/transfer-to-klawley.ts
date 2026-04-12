@@ -1,6 +1,6 @@
 /**
  * Transfer ETH from master fleet wallet to Klawley's smart wallet.
- * Usage: doppler run --project openclaw --config prd -- npx tsx src/cli/transfer-to-klawley.ts <amount_eth>
+ * Usage: doppler run --project openclaw --config prd -- bun x tsx src/cli/transfer-to-klawley.ts <amount_eth>
  */
 import { transferFromSmartAccount } from "../services/cdp.js";
 import { getEthBalance } from "../services/balance.js";

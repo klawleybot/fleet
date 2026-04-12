@@ -1,6 +1,6 @@
 /**
  * Testnet deploy: custom Doppler curve on Base Sepolia.
- * Run with: doppler run --project openclaw --config dev -- npx tsx scripts/_testnet-deploy.ts
+ * Run with: doppler run --project openclaw --config dev -- bun x tsx scripts/_testnet-deploy.ts
  */
 import { encodePoolConfig, PROFILES, computeLaunchTick } from "../src/services/poolConfig.js";
 import { createSponsoredBundlerClient } from "../src/services/bundler/config.js";

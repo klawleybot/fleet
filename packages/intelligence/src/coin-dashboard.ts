@@ -244,7 +244,7 @@ async function buildDashboard(input: {
 async function main() {
   const coinAddress = process.argv[2];
   if (!coinAddress) {
-    throw new Error("Usage: tsx src/coin-dashboard.ts <coin_address> [hours=24] [bucketMinutes=15] [outFile]");
+    throw new Error("Usage: bun x tsx src/coin-dashboard.ts <coin_address> [hours=24] [bucketMinutes=15] [outFile]");
   }
 
   const hours = Number(process.argv[3] ?? 24);

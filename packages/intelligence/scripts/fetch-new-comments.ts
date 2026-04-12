@@ -12,8 +12,8 @@
  * Does NOT update state — caller is responsible for that after processing.
  *
  * Usage:
- *   npx tsx scripts/fetch-new-comments.ts
- *   npx tsx scripts/fetch-new-comments.ts --update-state   # also writes state after fetch
+ *   bun x tsx scripts/fetch-new-comments.ts
+ *   bun x tsx scripts/fetch-new-comments.ts --update-state   # also writes state after fetch
  *
  * Output (stdout): JSON array of new comments
  * [

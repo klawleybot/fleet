@@ -3,7 +3,7 @@
  *
  * Usage:
  *   NEYNAR_API_KEY=... FARCASTER_FID=... FARCASTER_SIGNER_PRIVATE_KEY=...
- *   npx tsx post-farcaster.ts --text "hello" [--image /path/to/img.png] [--embed https://...]
+ *   bun x tsx scripts/post-farcaster.ts --text "hello" [--image /path/to/img.png] [--embed https://...]
  *
  * Requires @farcaster/hub-nodejs installed.
  */

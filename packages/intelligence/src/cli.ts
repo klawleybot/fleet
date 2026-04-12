@@ -47,7 +47,7 @@ function daemonStart() {
     fs.rmSync(env.PID_PATH, { force: true });
   }
 
-  const pid = execSync(`nohup npm run daemon:run >> ${env.DAEMON_LOG_PATH} 2>&1 & echo $!`, {
+  const pid = execSync(`nohup bun run daemon:run >> ${env.DAEMON_LOG_PATH} 2>&1 & echo $!`, {
     encoding: "utf8",
   }).trim();
 
@@ -209,7 +209,7 @@ async function main() {
   if (cmd === "first-coin") {
     const row = firstKnownCoin();
     if (!row) {
-      console.log("No local data yet. Run: npm run sync");
+      console.log("No local data yet. Run: bun run sync");
       return;
     }
     console.table([row]);

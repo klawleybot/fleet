@@ -99,15 +99,15 @@ Full roundtrip executed on Base mainnet (2026-02-19):
 
 ```bash
 # Unit + integration (73 tests)
-yarn workspace @fleet/server test
+bun run --filter @pump-it-up/server test
 
 # Base Sepolia e2e (needs doppler env)
 E2E_BASE_SEPOLIA=1 doppler run --project openclaw --config dev -- \
-  yarn workspace @fleet/server test -- tests/e2e.swap-lifecycle.spec.ts
+  bun run --filter @pump-it-up/server test tests/e2e.swap-lifecycle.spec.ts
 
 # Base mainnet e2e (needs doppler env, costs ~$0.20)
 E2E_BASE_MAINNET=1 doppler run --project openclaw --config dev -- \
-  yarn workspace @fleet/server test -- tests/e2e.mainnet-swap.spec.ts
+  bun run --filter @pump-it-up/server test tests/e2e.mainnet-swap.spec.ts
 ```
 
 ## Remaining Work

@@ -2,8 +2,8 @@
  * Mark comment IDs as replied in the state file.
  * 
  * Usage:
- *   npx tsx scripts/mark-comments-replied.ts <id1> [id2] [id3] ...
- *   echo '["id1","id2"]' | npx tsx scripts/mark-comments-replied.ts --stdin
+ *   bun x tsx scripts/mark-comments-replied.ts <id1> [id2] [id3] ...
+ *   echo '["id1","id2"]' | bun x tsx scripts/mark-comments-replied.ts --stdin
  */
 
 import { resolve, dirname } from "path";

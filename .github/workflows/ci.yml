@@ -22,11 +22,11 @@ jobs:
         with:
           node-version: 22
 
-      - name: Enable Corepack
-        run: corepack enable
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
 
       - name: Install deps
-        run: corepack yarn install --frozen-lockfile
+        run: bun ci
 
       - name: Install Foundry (forge/anvil)
         uses: foundry-rs/foundry-toolchain@v1
@@ -34,7 +34,7 @@ jobs:
           version: stable
 
       - name: Typecheck server
-        run: corepack yarn workspace @pump-it-up/server typecheck
+        run: bun run --filter @pump-it-up/server typecheck
 
       - name: E2E tests (${{ matrix.app_network }})
         env:
@@ -48,4 +48,4 @@ jobs:
           if [ -z "$BASE_SEPOLIA_RPC_URL" ]; then
             export BASE_SEPOLIA_RPC_URL="https://sepolia.base.org"
           fi
-          corepack yarn workspace @pump-it-up/server test:e2e
+          bun run --filter @pump-it-up/server test:e2e

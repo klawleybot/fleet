@@ -131,7 +131,7 @@ Each wallet sends `balance - reserveWei`. Returns per-wallet transfer results.
 ```bash
 # With Doppler (recommended)
 doppler run --project openclaw --config dev -- \
-  npx tsx packages/server/src/index.ts
+  bun x tsx packages/server/src/index.ts
 
 # Required env vars
 SIGNER_BACKEND=local          # or cdp
@@ -149,7 +149,7 @@ For one-off operations, direct script execution avoids HTTP server stability iss
 
 ```bash
 doppler run --project openclaw --config dev -- \
-  node --import tsx/esm packages/server/scripts/live-fleet-run.ts
+  bun x tsx packages/server/scripts/live-fleet-run.ts
 ```
 
 ## 6. Risk Controls

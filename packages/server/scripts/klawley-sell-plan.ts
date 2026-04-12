@@ -8,7 +8,7 @@
  *  4. Approve token to Permit2 + submit swap via bundler UserOp
  *
  * Usage:
- *   doppler run --project openclaw --config prd -- npx tsx packages/server/scripts/klawley-sell-plan.ts [--dry-run]
+ *   doppler run --project openclaw --config prd -- bun x tsx packages/server/scripts/klawley-sell-plan.ts [--dry-run]
  */
 
 import {

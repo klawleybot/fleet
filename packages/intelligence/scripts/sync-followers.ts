@@ -7,7 +7,7 @@
  * The browser-based cron job reads this output and executes follows/unfollows.
  * 
  * Usage:
- *   npx tsx scripts/sync-followers.ts [--coin <address>]
+ *   bun x tsx scripts/sync-followers.ts [--coin <address>]
  * 
  * Outputs JSON plan to stdout. State tracked in .data/zora-follow-state.json
  */

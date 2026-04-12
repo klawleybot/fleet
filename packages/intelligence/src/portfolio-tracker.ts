@@ -5,9 +5,9 @@
  * Generates stacked area charts showing liquid ETH, held tokens, and total.
  *
  * Usage:
- *   npx tsx src/portfolio-tracker.ts snapshot       — take a snapshot now
- *   npx tsx src/portfolio-tracker.ts chart [days]   — generate chart (default 7 days)
- *   npx tsx src/portfolio-tracker.ts history [days]  — print snapshot history
+ *   bun x tsx src/portfolio-tracker.ts snapshot       — take a snapshot now
+ *   bun x tsx src/portfolio-tracker.ts chart [days]   — generate chart (default 7 days)
+ *   bun x tsx src/portfolio-tracker.ts history [days]  — print snapshot history
  */
 
 import Database from "better-sqlite3";

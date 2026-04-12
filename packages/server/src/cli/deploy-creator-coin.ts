@@ -3,7 +3,7 @@
  * CLI to deploy a Creator Coin on Zora.
  *
  * Usage:
- *   doppler run --config prd -- npx tsx src/cli/deploy-creator-coin.ts \
+ *   doppler run --config prd -- bun x tsx src/cli/deploy-creator-coin.ts \
  *     --name "Klawley" \
  *     --symbol "KLAW" \
  *     --description "Sarcastic silicon with a caffeine deficit" \

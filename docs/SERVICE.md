@@ -5,8 +5,8 @@ Future architecture for running fleet as a persistent service with observability
 ## Current State: Script Execution
 
 Today we run fleet ops two ways:
-1. **HTTP server** (`npx tsx packages/server/src/index.ts`) — works but crashes under load, no process management
-2. **Direct scripts** (`node --import tsx/esm scripts/live-fleet-run.ts`) — more reliable for one-offs
+1. **HTTP server** (`bun x tsx packages/server/src/index.ts`) — works but crashes under load, no process management
+2. **Direct scripts** (`bun x tsx packages/server/scripts/live-fleet-run.ts`) — more reliable for one-offs
 
 Both require manual startup and have no log persistence.
 
@@ -19,7 +19,7 @@ Use `pm2` or a systemd unit for the fleet server:
 ```bash
 # pm2 approach
 pm2 start "doppler run --project openclaw --config dev -- \
-  npx tsx packages/server/src/index.ts" \
+  bun x tsx packages/server/src/index.ts" \
   --name fleet-server \
   --log /Users/user/.openclaw/workspace/fleet/logs/fleet.log \
   --time

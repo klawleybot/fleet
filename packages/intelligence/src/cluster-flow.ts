@@ -139,7 +139,7 @@ async function buildClusterFlow(input: {
 
 async function main() {
   const coinAddress = process.argv[2];
-  if (!coinAddress) throw new Error("Usage: tsx src/cluster-flow.ts <coin_address> [hours=48] [outFile]");
+  if (!coinAddress) throw new Error("Usage: bun x tsx src/cluster-flow.ts <coin_address> [hours=48] [outFile]");
 
   const hours = Number(process.argv[3] ?? 48);
   const defaultOutDir = fs.existsSync('/Users/user/.openclaw/media') ? '/Users/user/.openclaw/media' : './tmp';

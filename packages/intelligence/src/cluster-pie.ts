@@ -128,7 +128,7 @@ async function buildClusterPie(input: {
 
 async function main() {
   const coinAddress = process.argv[2];
-  if (!coinAddress) throw new Error("Usage: tsx src/cluster-pie.ts <coin_address> [hours=24] [topN=6] [outFile]");
+  if (!coinAddress) throw new Error("Usage: bun x tsx src/cluster-pie.ts <coin_address> [hours=24] [topN=6] [outFile]");
 
   const hours = Number(process.argv[3] ?? 24);
   const topN = Number(process.argv[4] ?? 6);

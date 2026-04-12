@@ -3,7 +3,7 @@
  * Two-pass permit flow (proven pattern from klawley-sell-plan.ts).
  *
  * Usage:
- *   doppler run --project openclaw --config prd -- npx tsx packages/server/scripts/klawley-zora-to-usdc.ts [--dry-run]
+ *   doppler run --project openclaw --config prd -- bun x tsx packages/server/scripts/klawley-zora-to-usdc.ts [--dry-run]
  */
 
 import {

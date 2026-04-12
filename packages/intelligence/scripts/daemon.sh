@@ -3,10 +3,10 @@ set -euo pipefail
 
 cmd="${1:-status}"
 case "$cmd" in
-  start) npm run daemon:start ;;
-  stop) npm run daemon:stop ;;
-  status) npm run daemon:status ;;
-  run) npm run daemon:run ;;
+  start) bun run daemon:start ;;
+  stop) bun run daemon:stop ;;
+  status) bun run daemon:status ;;
+  run) bun run daemon:run ;;
   *)
     echo "usage: scripts/daemon.sh {start|stop|status|run}"
     exit 1

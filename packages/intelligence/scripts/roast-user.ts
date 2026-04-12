@@ -2,9 +2,9 @@
  * Pull comprehensive roast data for a Zora user by handle or address.
  * 
  * Usage:
- *   npx tsx scripts/roast-user.ts <handle-or-address>
- *   npx tsx scripts/roast-user.ts 8bitbase
- *   npx tsx scripts/roast-user.ts 0x1f332fe7d22e1b2d8ce995a9e9b17444cb0dfb57
+ *   bun x tsx scripts/roast-user.ts <handle-or-address>
+ *   bun x tsx scripts/roast-user.ts 8bitbase
+ *   bun x tsx scripts/roast-user.ts 0x1f332fe7d22e1b2d8ce995a9e9b17444cb0dfb57
  */
 
 import Database from "better-sqlite3";

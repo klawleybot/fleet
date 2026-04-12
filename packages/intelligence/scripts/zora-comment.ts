@@ -5,8 +5,8 @@
  * Requires: OpenClaw browser with "openclaw" profile, logged into Zora.
  *
  * Usage (CLI):
- *   npx tsx zora-comment.ts --coin <address> --comment "your comment here"
- *   npx tsx zora-comment.ts --url <full-zora-url> --comment "your comment"
+ *   bun x tsx scripts/zora-comment.ts --coin <address> --comment "your comment here"
+ *   bun x tsx scripts/zora-comment.ts --url <full-zora-url> --comment "your comment"
  *
  * Usage (as module):
  *   import { postZoraComment } from './zora-comment.js';

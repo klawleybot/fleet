@@ -1,7 +1,7 @@
 /**
  * Live Fleet Run — direct execution (no HTTP server)
  *
- * Usage: doppler run --project openclaw --config dev -- node --import tsx/esm packages/server/scripts/live-fleet-run.ts
+ * Usage: doppler run --project openclaw --config dev -- bun x tsx packages/server/scripts/live-fleet-run.ts
  */
 process.env.SIGNER_BACKEND = "local";
 process.env.CDP_MOCK_MODE = "0";
