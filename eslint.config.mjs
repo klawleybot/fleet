@@ -14,6 +14,26 @@ const nonProductionFiles = [
   'packages/**/vitest*.ts',
 ];
 
+const cliEntryFiles = [
+  'packages/server/src/cli/**/*.ts',
+  'packages/intelligence/src/chart.ts',
+  'packages/intelligence/src/cli.ts',
+  'packages/intelligence/src/cluster-flow.ts',
+  'packages/intelligence/src/cluster-pie.ts',
+  'packages/intelligence/src/coin-dashboard.ts',
+  'packages/intelligence/src/commentary.ts',
+  'packages/intelligence/src/daily-snapshot.ts',
+  'packages/intelligence/src/irys-fund-test.ts',
+  'packages/intelligence/src/klawley-trader.ts',
+  'packages/intelligence/src/portfolio-tracker.ts',
+  'packages/intelligence/src/price-volume.ts',
+  'packages/intelligence/src/scout-executor.ts',
+  'packages/intelligence/src/scout-live.ts',
+  'packages/intelligence/src/scout.ts',
+  'packages/intelligence/src/sell-monitor.ts',
+  'packages/intelligence/src/zora-comments.ts',
+];
+
 export default tseslint.config(
   {
     ignores: [
@@ -78,6 +98,12 @@ export default tseslint.config(
       '@typescript-eslint/restrict-plus-operands': 'off',
       '@typescript-eslint/restrict-template-expressions': 'off',
       '@typescript-eslint/unbound-method': 'off',
+      'no-console': 'off',
+    },
+  },
+  {
+    files: cliEntryFiles,
+    rules: {
       'no-console': 'off',
     },
   },

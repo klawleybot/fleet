@@ -22,6 +22,33 @@ type SwapRow = {
   coin_amount: number | null;
 };
 
+type CoinRow = {
+  address: string;
+  symbol: string | null;
+  name: string | null;
+  volume_24h: number | null;
+  market_cap: number | null;
+  chain_id: number | null;
+  raw_json: string | null;
+};
+
+type AnalyticsRow = {
+  swap_count_1h: number | null;
+  swap_count_prev_1h: number | null;
+  net_flow_usdc_1h: number | null;
+  momentum_score_1h: number | null;
+  momentum_acceleration_1h: number | null;
+  swap_count_24h: number | null;
+  net_flow_usdc_24h: number | null;
+  momentum_score: number | null;
+};
+
+type CoinRawJson = {
+  tokenPrice?: {
+    priceInUsdc?: string;
+  };
+};
+
 function pct(a: number, b: number) {
   if (!Number.isFinite(a) || !Number.isFinite(b) || b === 0) return 0;
   return ((a - b) / Math.abs(b)) * 100;
@@ -37,19 +64,19 @@ async function buildDashboard(input: {
   const hours = Math.max(2, Math.min(168, Number(input.hours || 24)));
   const bucketMinutes = Math.max(1, Math.min(60, Number(input.bucketMinutes || 15)));
 
-  const coin = db.prepare(`
+  const coin = db.prepare<[string], CoinRow>(`
     SELECT address, symbol, name, volume_24h, market_cap, chain_id, raw_json
     FROM coins
     WHERE address = ?
-  `).get(addr) as any;
+  `).get(addr);
   if (!coin) throw new Error(`coin not found: ${addr}`);
 
-  const analytics = db.prepare(`
+  const analytics = db.prepare<[string], AnalyticsRow>(`
     SELECT swap_count_1h, swap_count_prev_1h, net_flow_usdc_1h, momentum_score_1h, momentum_acceleration_1h,
            swap_count_24h, net_flow_usdc_24h, momentum_score
     FROM coin_analytics
     WHERE coin_address = ?
-  `).get(addr) as any;
+  `).get(addr);
 
   const swaps = db.prepare(`
     SELECT block_timestamp, activity_type, amount_usdc, coin_amount
@@ -107,10 +134,13 @@ async function buildDashboard(input: {
     buyPct.push(Math.round((b.buy / sideTot) * 100));
   }
 
-  const coinRaw = (() => {
-    try { return JSON.parse(String(coin.raw_json ?? "{}")); }
-    catch { return {}; }
-  })() as any;
+  const coinRaw: CoinRawJson = (() => {
+    try {
+      return JSON.parse(String(coin.raw_json ?? "{}")) as CoinRawJson;
+    } catch {
+      return {};
+    }
+  })();
   const latestPrice = Number(coinRaw?.tokenPrice?.priceInUsdc ?? 0);
   const mcap = Number(coin.market_cap ?? 0);
 

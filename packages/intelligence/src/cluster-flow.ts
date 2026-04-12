@@ -15,6 +15,7 @@ type FlowRow = {
   block_timestamp: string;
   amount_decimal: number | null;
 };
+type CoinRow = { symbol: string | null; name: string | null; address: string };
 
 function floorHour(ts: string) {
   const d = new Date(ts);
@@ -31,7 +32,7 @@ async function buildClusterFlow(input: {
   const addr = norm(input.coinAddress);
   const hours = Math.max(6, Math.min(168, Number(input.hours || 48)));
 
-  const coin = db.prepare(`SELECT symbol, name, address FROM coins WHERE address = ?`).get(addr) as any;
+  const coin = db.prepare<[string], CoinRow>(`SELECT symbol, name, address FROM coins WHERE address = ?`).get(addr);
   if (!coin) throw new Error(`coin not found: ${addr}`);
 
   const rows = db.prepare(`

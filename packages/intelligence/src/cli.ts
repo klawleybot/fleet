@@ -101,8 +101,11 @@ async function main() {
   }
 
   if (cmd === "contracts") {
+    const deployments = protocolDeployments as unknown as {
+      coinFactoryAddress?: Record<number, string>;
+    };
     console.log("Zora Coin Factory addresses from @zoralabs/protocol-deployments:");
-    console.log(JSON.stringify((protocolDeployments as any).coinFactoryAddress ?? {}, null, 2));
+    console.log(JSON.stringify(deployments.coinFactoryAddress ?? {}, null, 2));
     return;
   }
 

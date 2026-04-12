@@ -10,6 +10,13 @@ function shortAddr(a: string) {
   return `${a.slice(0, 6)}…${a.slice(-4)}`;
 }
 
+type CoinRow = { symbol: string | null; name: string | null; address: string };
+type DatalabelContext = {
+  dataset?: {
+    data?: number[];
+  };
+};
+
 async function buildClusterPie(input: {
   coinAddress: string;
   hours: number;
@@ -20,7 +27,7 @@ async function buildClusterPie(input: {
   const hours = Math.max(1, Math.min(168, Number(input.hours || 24)));
   const topN = Math.max(3, Math.min(12, Number(input.topN || 6)));
 
-  const coin = db.prepare(`SELECT symbol, name, address FROM coins WHERE address = ?`).get(addr) as any;
+  const coin = db.prepare<[string], CoinRow>(`SELECT symbol, name, address FROM coins WHERE address = ?`).get(addr);
   if (!coin) throw new Error(`coin not found: ${addr}`);
 
   const rows = db.prepare(`
@@ -83,9 +90,9 @@ async function buildClusterPie(input: {
       plugins: {
         datalabels: {
           color: "white",
-          formatter: (value: number, ctx: any) => {
-            const dataset = ctx?.dataset?.data || [];
-            const s = dataset.reduce((a: number, b: number) => a + b, 0);
+          formatter: (value: number, ctx: DatalabelContext) => {
+            const dataset = ctx.dataset?.data ?? [];
+            const s = dataset.reduce((sum, current) => sum + current, 0);
             const pct = s > 0 ? (value / s) * 100 : 0;
             return `${pct.toFixed(1)}%`;
           },

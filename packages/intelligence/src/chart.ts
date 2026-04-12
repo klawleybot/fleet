@@ -11,6 +11,7 @@ function shortAddr(a: string) {
 }
 
 type SwapRow = { block_timestamp: string; activity_type: string | null; amount_usdc: number | null };
+type CoinRow = { address: string; symbol: string | null; name: string | null };
 
 function floorToBucket(d: Date, minutes: number) {
   const ms = minutes * 60 * 1000;
@@ -27,7 +28,7 @@ async function buildChartPng(input: {
   const hours = Math.max(1, Math.min(168, Number(input.hours || 24)));
   const bucketMinutes = Math.max(1, Math.min(60, Number(input.bucketMinutes || 15)));
 
-  const coin = db.prepare(`SELECT address, symbol, name FROM coins WHERE address = ?`).get(addr) as any;
+  const coin = db.prepare<[string], CoinRow>(`SELECT address, symbol, name FROM coins WHERE address = ?`).get(addr);
   if (!coin) throw new Error(`coin not found: ${addr}`);
 
   const rows = db.prepare(`

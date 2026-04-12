@@ -98,25 +98,122 @@ interface MarketContext {
   vibeReason: string;
 }
 
+interface DataRangeRow {
+  oldest: string | null;
+  newest: string | null;
+}
+
+interface ActivityRow {
+  swaps: number;
+  coins: number;
+}
+
+interface CoinMovementRow {
+  symbol: string;
+  name: string;
+  address: string;
+  market_cap: number | null;
+  volume_24h: number | null;
+  swap_count_24h: number;
+  buy_count_24h: number;
+  sell_count_24h: number;
+  net_flow_usdc_24h: number;
+  momentum_score: number;
+  momentum_acceleration_1h: number;
+  buy_volume_usdc_24h: number;
+  sell_volume_usdc_24h: number;
+}
+
+interface FreshLaunchRow {
+  symbol: string;
+  name: string;
+  created_at: string;
+  swap_count_24h: number;
+  buy_count_24h: number;
+  sell_count_24h: number;
+  net_flow_usdc_24h: number | null;
+}
+
+interface DegenProfileRow {
+  sender_address: string;
+  handle: string | null;
+  swaps: number;
+  coins: number;
+  buys: number;
+  sells: number;
+}
+
+interface CoinTradeRow {
+  coin_address: string;
+  symbol: string | null;
+  name: string | null;
+  buys: number;
+  sells: number;
+  net_flow: number | null;
+}
+
+interface TopCoinAddressRow {
+  coin_address: string;
+}
+
+interface CoinInfoRow {
+  symbol: string | null;
+  name: string | null;
+}
+
+interface HourlyRow {
+  hour: string;
+  swaps: number;
+  buys: number;
+  sells: number;
+}
+
+interface TotalBuysRow {
+  buys: number | null;
+  sells: number | null;
+}
+
+interface TraderAddressRow {
+  sender_address: string;
+}
+
+interface ProfileLookupResult {
+  data?: {
+    profile?: {
+      handle?: string;
+      username?: string;
+      displayName?: string;
+    };
+  };
+}
+
+interface ChatCompletionResponse {
+  choices?: Array<{
+    message?: {
+      content?: string | null;
+    } | null;
+  }>;
+}
+
 export function generateMarketContext(dbPath?: string): MarketContext {
   const db = new Database(dbPath || DEFAULT_DB, { readonly: true });
 
   const now = new Date().toISOString();
 
   // Data range
-  const range = db.prepare(
+  const range = db.prepare<[], DataRangeRow>(
     "SELECT min(block_timestamp) as oldest, max(block_timestamp) as newest FROM coin_swaps"
-  ).get() as any;
+  ).get() ?? { oldest: null, newest: null };
 
   // Total activity
-  const activity = db.prepare(`
+  const activity = db.prepare<[], ActivityRow>(`
     SELECT count(*) as swaps, count(distinct coin_address) as coins
     FROM coin_swaps
     WHERE block_timestamp > datetime('now', '-24 hours')
-  `).get() as any;
+  `).get() ?? { swaps: 0, coins: 0 };
 
   // === BIGGEST DUMPS (high sell ratio + volume) ===
-  const dumps = db.prepare(`
+  const dumps = db.prepare<[], CoinMovementRow>(`
     SELECT c.symbol, c.name, c.address, c.market_cap, c.volume_24h,
            ca.swap_count_24h, ca.buy_count_24h, ca.sell_count_24h,
            ca.net_flow_usdc_24h, ca.momentum_score, ca.momentum_acceleration_1h,
@@ -127,7 +224,7 @@ export function generateMarketContext(dbPath?: string): MarketContext {
       AND ca.sell_count_24h > ca.buy_count_24h
     ORDER BY (ca.sell_count_24h * 1.0 / ca.swap_count_24h) DESC, ca.swap_count_24h DESC
     LIMIT 8
-  `).all() as any[];
+  `).all();
 
   const biggestDumps: CoinMovement[] = dumps.map(d => ({
     symbol: d.symbol,
@@ -146,7 +243,7 @@ export function generateMarketContext(dbPath?: string): MarketContext {
   }));
 
   // === BIGGEST PUMPS (high buy ratio + volume) ===
-  const pumps = db.prepare(`
+  const pumps = db.prepare<[], CoinMovementRow>(`
     SELECT c.symbol, c.name, c.address, c.market_cap, c.volume_24h,
            ca.swap_count_24h, ca.buy_count_24h, ca.sell_count_24h,
            ca.net_flow_usdc_24h, ca.momentum_score, ca.momentum_acceleration_1h,
@@ -157,7 +254,7 @@ export function generateMarketContext(dbPath?: string): MarketContext {
       AND ca.buy_count_24h > ca.sell_count_24h
     ORDER BY (ca.buy_count_24h * 1.0 / ca.swap_count_24h) DESC, ca.swap_count_24h DESC
     LIMIT 8
-  `).all() as any[];
+  `).all();
 
   const biggestPumps: CoinMovement[] = pumps.map(p => ({
     symbol: p.symbol,
@@ -176,7 +273,7 @@ export function generateMarketContext(dbPath?: string): MarketContext {
   }));
 
   // === FRESH LAUNCHES (created in last 24h) ===
-  const freshRows = db.prepare(`
+  const freshRows = db.prepare<[], FreshLaunchRow>(`
     SELECT c.symbol, c.name, c.created_at,
            ca.swap_count_24h, ca.buy_count_24h, ca.sell_count_24h,
            ca.net_flow_usdc_24h
@@ -186,16 +283,18 @@ export function generateMarketContext(dbPath?: string): MarketContext {
       AND ca.swap_count_24h > 3
     ORDER BY ca.swap_count_24h DESC
     LIMIT 10
-  `).all() as any[];
+  `).all();
 
   const freshLaunches: FreshLaunch[] = freshRows.map(f => {
     const hoursOld = (Date.now() - new Date(f.created_at).getTime()) / 3600000;
     const ratio = f.buy_count_24h / Math.max(f.sell_count_24h, 1);
-    let verdict: FreshLaunch["verdict"] = "too-early";
-    if (hoursOld < 2) verdict = "too-early";
-    else if (ratio > 2) verdict = "pumping";
-    else if (ratio < 0.5) verdict = "dumping";
-    else verdict = "flatline";
+    const verdict: FreshLaunch["verdict"] = hoursOld < 2
+      ? "too-early"
+      : ratio > 2
+        ? "pumping"
+        : ratio < 0.5
+          ? "dumping"
+          : "flatline";
     return {
       symbol: f.symbol,
       name: f.name,
@@ -209,7 +308,7 @@ export function generateMarketContext(dbPath?: string): MarketContext {
   });
 
   // === DEGEN PROFILES ===
-  const degenRows = db.prepare(`
+  const degenRows = db.prepare<[], DegenProfileRow>(`
     SELECT cs.sender_address,
            a.last_profile_handle as handle,
            count(*) as swaps,
@@ -223,10 +322,10 @@ export function generateMarketContext(dbPath?: string): MarketContext {
     HAVING swaps >= 10
     ORDER BY swaps DESC
     LIMIT 25
-  `).all() as any[];
+  `).all();
 
   // Per-trader coin breakdown
-  const traderCoinStmt = db.prepare(`
+  const traderCoinStmt = db.prepare<[string], CoinTradeRow>(`
     SELECT cs.coin_address, c.symbol, c.name,
            sum(case when cs.activity_type='BUY' then 1 else 0 end) as buys,
            sum(case when cs.activity_type='SELL' then 1 else 0 end) as sells,
@@ -241,13 +340,15 @@ export function generateMarketContext(dbPath?: string): MarketContext {
   `);
 
   const degenProfiles: DegenProfile[] = degenRows.map(d => {
-    let style: DegenProfile["style"] = "flipper";
-    if (d.sells === 0) style = "ape";
-    else if (d.buys === 0) style = "exit-only";
-    else if (d.buys > d.sells * 3) style = "hodler";
-    else style = "flipper";
+    const style: DegenProfile["style"] = d.sells === 0
+      ? "ape"
+      : d.buys === 0
+        ? "exit-only"
+        : d.buys > d.sells * 3
+          ? "hodler"
+          : "flipper";
 
-    const coinRows = traderCoinStmt.all(d.sender_address) as any[];
+    const coinRows = traderCoinStmt.all(d.sender_address);
     const coinTrades: CoinTrade[] = coinRows.map(ct => ({
       symbol: ct.symbol || "???",
       name: ct.name || "Unknown",
@@ -275,20 +376,20 @@ export function generateMarketContext(dbPath?: string): MarketContext {
   });
 
   // === TIMELINES (hourly activity for top 5 coins) ===
-  const topCoinAddrs = db.prepare(`
+  const topCoinAddrs = db.prepare<[], TopCoinAddressRow>(`
     SELECT coin_address FROM coin_analytics
     WHERE swap_count_24h >= 20
     ORDER BY swap_count_24h DESC
     LIMIT 5
-  `).all() as any[];
+  `).all();
 
   const timelines: CoinTimeline[] = [];
   for (const { coin_address } of topCoinAddrs) {
-    const coinInfo = db.prepare(
+    const coinInfo = db.prepare<[string], CoinInfoRow>(
       "SELECT symbol, name FROM coins WHERE address = ?"
-    ).get(coin_address) as any;
+    ).get(coin_address);
 
-    const hourlyRows = db.prepare(`
+    const hourlyRows = db.prepare<[string], HourlyRow>(`
       SELECT strftime('%Y-%m-%d %H:00', block_timestamp) as hour,
              count(*) as swaps,
              sum(case when activity_type='BUY' then 1 else 0 end) as buys,
@@ -298,7 +399,7 @@ export function generateMarketContext(dbPath?: string): MarketContext {
         AND block_timestamp > datetime('now', '-24 hours')
       GROUP BY hour
       ORDER BY hour ASC
-    `).all(coin_address) as any[];
+    `).all(coin_address);
 
     if (hourlyRows.length < 2) continue;
 
@@ -320,7 +421,7 @@ export function generateMarketContext(dbPath?: string): MarketContext {
     else if (secondAvg < firstAvg * 0.5) trend = "decelerating";
     else if (secondAvg === 0) trend = "dead";
 
-    const peakHourObj = hourly.reduce((max, h) => h.swaps > (max?.swaps ?? 0) ? h : max, hourly[0] as typeof hourly[number] | undefined);
+    const peakHourObj = hourly.reduce((max, h) => h.swaps > (max?.swaps ?? 0) ? h : max, hourly[0]);
 
     timelines.push({
       symbol: coinInfo?.symbol || "???",
@@ -333,36 +434,41 @@ export function generateMarketContext(dbPath?: string): MarketContext {
   }
 
   // === OVERALL VIBE ===
-  const totalBuys = db.prepare(`
+  const totalBuys = db.prepare<[], TotalBuysRow>(`
     SELECT sum(case when activity_type='BUY' then 1 else 0 end) as buys,
            sum(case when activity_type='SELL' then 1 else 0 end) as sells
     FROM coin_swaps
     WHERE block_timestamp > datetime('now', '-6 hours')
-  `).get() as any;
+  `).get() ?? { buys: 0, sells: 0 };
 
-  let overallVibe: MarketContext["overallVibe"] = "crab";
-  let vibeReason = "";
-
-  const buyRatio = totalBuys.buys / Math.max(totalBuys.buys + totalBuys.sells, 1);
-  if (buyRatio > 0.65) {
-    overallVibe = "bullish";
-    vibeReason = `${(buyRatio * 100).toFixed(0)}% of last 6h swaps are buys — degens are aping in`;
-  } else if (buyRatio < 0.4) {
-    overallVibe = "bearish";
-    vibeReason = `${((1 - buyRatio) * 100).toFixed(0)}% of last 6h swaps are sells — exit doors are crowded`;
-  } else if (activity.swaps < 100) {
-    overallVibe = "crab";
-    vibeReason = `Only ${activity.swaps} swaps in 24h — the trenches are ghost town quiet`;
-  } else {
-    overallVibe = "chaos";
-    vibeReason = `Buy/sell ratio is ${(buyRatio * 100).toFixed(0)}/${((1 - buyRatio) * 100).toFixed(0)} with ${activity.swaps} swaps — pure noise`;
-  }
+  const buyCount = totalBuys.buys ?? 0;
+  const sellCount = totalBuys.sells ?? 0;
+  const buyRatio = buyCount / Math.max(buyCount + sellCount, 1);
+  const [overallVibe, vibeReason]: [MarketContext["overallVibe"], string] = buyRatio > 0.65
+    ? [
+        "bullish",
+        `${(buyRatio * 100).toFixed(0)}% of last 6h swaps are buys — degens are aping in`,
+      ]
+    : buyRatio < 0.4
+      ? [
+          "bearish",
+          `${((1 - buyRatio) * 100).toFixed(0)}% of last 6h swaps are sells — exit doors are crowded`,
+        ]
+      : activity.swaps < 100
+        ? [
+            "crab",
+            `Only ${activity.swaps} swaps in 24h — the trenches are ghost town quiet`,
+          ]
+        : [
+            "chaos",
+            `Buy/sell ratio is ${(buyRatio * 100).toFixed(0)}/${((1 - buyRatio) * 100).toFixed(0)} with ${activity.swaps} swaps — pure noise`,
+          ];
 
   db.close();
 
   return {
     generatedAt: now,
-    dataRange: { oldest: range.oldest, newest: range.newest },
+    dataRange: { oldest: range.oldest ?? now, newest: range.newest ?? now },
     totalActiveCoins: activity.coins,
     totalSwaps24h: activity.swaps,
     biggestDumps,
@@ -378,11 +484,7 @@ export function generateMarketContext(dbPath?: string): MarketContext {
 /**
  * Format MarketContext into a prompt-ready text block for Klawley.
  */
-export async function formatCommentaryPrompt(ctx: MarketContext): Promise<string> {
-  // Resolve degen profile addresses to Zora handles (up to 25)
-  const degenAddresses = ctx.degenProfiles.map(d => d.address);
-  const handleMap = degenAddresses.length > 0 ? await resolveHandles(degenAddresses) : new Map<string, string>();
-
+export function formatCommentaryPrompt(ctx: MarketContext): string {
   const lines: string[] = [];
 
   lines.push(`# 🦞 ZORA TRENCHES REPORT — ${new Date(ctx.generatedAt).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", year: "numeric" })}`);
@@ -480,8 +582,10 @@ export async function formatCommentaryPrompt(ctx: MarketContext): Promise<string
  * Returns a Map<address, handle>. Silently skips failures.
  */
 async function resolveHandles(addresses: string[]): Promise<Map<string, string>> {
-  const { getProfile } = await import("@zoralabs/coins-sdk") as any;
   const handles = new Map<string, string>();
+  const sdk = (await import("@zoralabs/coins-sdk")) as unknown as {
+    getProfile: (input: { identifier: string }) => Promise<ProfileLookupResult>;
+  };
   
   // Limit to 25 lookups to avoid rate limits
   const unique = [...new Set(addresses)].slice(0, 25);
@@ -489,9 +593,9 @@ async function resolveHandles(addresses: string[]): Promise<Map<string, string>>
   await Promise.allSettled(
     unique.map(async (addr) => {
       try {
-        const res = await getProfile({ identifier: addr });
-        const profile = res?.data?.profile;
-        const handle = profile?.handle || profile?.username || profile?.displayName;
+        const res = await sdk.getProfile({ identifier: addr });
+        const profile = res.data?.profile;
+        const handle = profile?.handle ?? profile?.username ?? profile?.displayName ?? null;
         if (handle) handles.set(addr.toLowerCase(), handle);
       } catch { /* skip */ }
     })
@@ -505,16 +609,16 @@ async function resolveHandles(addresses: string[]): Promise<Map<string, string>>
  * Looks at the underlying swap data in the DB for the alerted coins.
  */
 function getTopTraderAddresses(alertContexts: AlertContext[], dbPath?: string): string[] {
+  const db = new Database(dbPath || DEFAULT_DB, { readonly: true });
   try {
-    const db = new Database(dbPath || DEFAULT_DB, { readonly: true });
     const coinAddresses = alertContexts
-      .map(a => (a as any).coinAddress || "")
-      .filter(Boolean);
+      .map((a) => a.coinAddress ?? "")
+      .filter((address): address is string => address.length > 0);
     
     if (coinAddresses.length === 0) return [];
     
     const placeholders = coinAddresses.map(() => "?").join(",");
-    const rows = db.prepare(`
+    const rows = db.prepare<string[], TraderAddressRow>(`
       SELECT sender_address, COUNT(*) as txns
       FROM coin_swaps
       WHERE coin_address IN (${placeholders})
@@ -523,12 +627,13 @@ function getTopTraderAddresses(alertContexts: AlertContext[], dbPath?: string): 
       HAVING txns >= 3
       ORDER BY txns DESC
       LIMIT 10
-    `).all(...coinAddresses) as any[];
-    
-    db.close();
+    `).all(...coinAddresses);
+
     return rows.map(r => r.sender_address);
   } catch {
     return [];
+  } finally {
+    db.close();
   }
 }
 
@@ -551,7 +656,7 @@ interface AlertContext {
  * Model override: set COMMENTARY_MODEL env var (default: gpt-5.4-mini).
  * Provider override: set COMMENTARY_PROVIDER env var ("xai" or "openai", default: "openai").
  */
-export async function generateBatchCommentary(alertContexts: unknown[]): Promise<string> {
+export async function generateBatchCommentary(alertContexts: AlertContext[]): Promise<string> {
   const provider = (process.env.COMMENTARY_PROVIDER || "openai").toLowerCase();
   const isXai = provider === "xai";
 
@@ -563,13 +668,15 @@ export async function generateBatchCommentary(alertContexts: unknown[]): Promise
   const model = process.env.COMMENTARY_MODEL || (isXai ? "grok-4-1-fast" : "gpt-5.4-mini");
   const baseUrl = isXai ? "https://api.x.ai/v1" : "https://api.openai.com/v1";
 
-  const contexts = alertContexts as AlertContext[];
+  const contexts = alertContexts;
 
   // Resolve trader handles in parallel with prompt building
   let handleMap = new Map<string, string>();
   try {
     // Get coin addresses from contexts
-    const coinAddrs = contexts.map(c => c.coinAddress).filter(Boolean) as string[];
+    const coinAddrs = contexts
+      .map((c) => c.coinAddress ?? "")
+      .filter((address): address is string => address.length > 0);
     
     // Also try to resolve coin creator addresses
     const traderAddrs = getTopTraderAddresses(contexts);
@@ -612,8 +719,8 @@ export async function generateBatchCommentary(alertContexts: unknown[]): Promise
     });
 
     if (!res.ok) return "";
-    const json = await res.json() as any;
-    return (json.choices?.[0]?.message?.content || "").trim();
+    const json = (await res.json()) as ChatCompletionResponse;
+    return (json.choices?.[0]?.message?.content ?? "").trim();
   } catch {
     return "";
   }
@@ -621,17 +728,17 @@ export async function generateBatchCommentary(alertContexts: unknown[]): Promise
 
 // CLI entry point
 if (import.meta.url === `file://${process.argv[1]}`) {
-  (async () => {
+  void (async () => {
     const { saveDailySnapshot, generateTrendContext } = await import("./daily-snapshot.js");
 
     // Save today's snapshot first (non-blocking if it fails)
-    try { saveDailySnapshot(); } catch (e) { /* non-fatal */ }
+    try { saveDailySnapshot(); } catch { /* non-fatal */ }
 
     // Generate trend context from history (7 days)
     const trendCtx = generateTrendContext(7);
 
     const ctx = generateMarketContext();
-    const prompt = await formatCommentaryPrompt(ctx);
+    const prompt = formatCommentaryPrompt(ctx);
 
     // Prepend trend context if available
     if (trendCtx) {
