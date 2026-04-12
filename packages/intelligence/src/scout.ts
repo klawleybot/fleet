@@ -11,19 +11,24 @@
  * This module does NOT execute trades — it produces a report.
  */
 
-import * as zoraSdk from "@zoralabs/coins-sdk";
 import { IntelligenceEngine } from "./engine.js";
 import { checkTradeabilityBatch, closeTradeabilityDb } from "./tradeability.js";
-
-// SDK function references
-const getCoinHolders = (zoraSdk as any).getCoinHolders as (args: any) => Promise<any>;
-const getCoinComments = (zoraSdk as any).getCoinComments as (args: any) => Promise<any>;
-const getProfileBalances = (zoraSdk as any).getProfileBalances as (args: any) => Promise<any>;
-const getCoinsTopGainers = (zoraSdk as any).getCoinsTopGainers as (args: any) => Promise<any>;
-const getCoinsLastTradedUnique = (zoraSdk as any).getCoinsLastTradedUnique as (args: any) => Promise<any>;
-const getCoin = (zoraSdk as any).getCoin as (args: any) => Promise<any>;
-const getCoinSwaps = (zoraSdk as any).getCoinSwaps as (args: any) => Promise<any>;
-const setApiKey = (zoraSdk as any).setApiKey as ((apiKey: string) => void) | undefined;
+import {
+  coinHolderEdges,
+  coinHolderPageInfo,
+  coinSwapEdges,
+  commentEdges,
+  exploreEdges,
+  getCoin,
+  getCoinComments,
+  getCoinHolders,
+  getCoinsLastTradedUnique,
+  getCoinsTopGainers,
+  getCoinSwaps,
+  getProfileBalances,
+  profileBalanceEdges,
+  setApiKey,
+} from "./zora-sdk.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -107,6 +112,10 @@ export interface ScoutReport {
   summary?: string;
 }
 
+function messageFromError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 // ---------------------------------------------------------------------------
 // Step 1: Holder Intelligence
 // ---------------------------------------------------------------------------
@@ -128,10 +137,11 @@ export async function getKlawleyHolders(limit = 50): Promise<HolderInfo[]> {
       ...(cursor ? { after: cursor } : {}),
     });
 
-    const data = res?.data?.zora20Token?.tokenBalances;
-    if (!data?.edges?.length) break;
+    const edges = coinHolderEdges(res);
+    if (!edges.length) break;
 
-    for (const edge of data.edges) {
+    for (const edge of edges) {
+      if (!edge.node) continue;
       const node = edge.node;
       holders.push({
         address: node.ownerAddress?.toLowerCase() ?? "",
@@ -140,8 +150,9 @@ export async function getKlawleyHolders(limit = 50): Promise<HolderInfo[]> {
       });
     }
 
-    if (!data.pageInfo?.hasNextPage) break;
-    cursor = data.pageInfo.endCursor;
+    const pageInfo = coinHolderPageInfo(res);
+    if (!pageInfo?.hasNextPage) break;
+    cursor = pageInfo.endCursor ?? undefined;
     pages++;
   }
 
@@ -170,15 +181,16 @@ async function getHolderPortfolio(holderAddress: string, limit = 20): Promise<Ar
       chainIds: [CHAIN_ID],
     });
 
-    const edges = res?.data?.profile?.coinBalances?.edges ?? [];
-    return edges.map((e: any) => ({
-      coinAddress: (e.node?.coin?.address ?? "").toLowerCase(),
-      symbol: e.node?.coin?.symbol ?? null,
-      name: e.node?.coin?.name ?? null,
-      balance: Number(e.node?.balance ?? 0),
-    })).filter((c: any) => c.coinAddress && c.coinAddress !== OPENKLAW_COIN);
-  } catch (err) {
-    console.error(`Failed to get portfolio for ${holderAddress}:`, err);
+    return profileBalanceEdges(res)
+      .map((edge) => ({
+        coinAddress: (edge.node?.coin?.address ?? "").toLowerCase(),
+        symbol: edge.node?.coin?.symbol ?? null,
+        name: edge.node?.coin?.name ?? null,
+        balance: Number(edge.node?.balance ?? 0),
+      }))
+      .filter((coin) => coin.coinAddress && coin.coinAddress !== OPENKLAW_COIN);
+  } catch (error) {
+    console.error(`Failed to get portfolio for ${holderAddress}:`, error);
     return [];
   }
 }
@@ -237,16 +249,15 @@ export async function getTopGainers(limit = 20): Promise<Array<{
 }>> {
   try {
     const res = await getCoinsTopGainers({ count: limit });
-    const edges = res?.data?.exploreList?.edges ?? [];
-    return edges.map((e: any) => ({
-      address: (e.node?.address ?? "").toLowerCase(),
-      symbol: e.node?.symbol ?? null,
-      name: e.node?.name ?? null,
-      marketCap: Number(e.node?.marketCap ?? 0),
-      volume24h: Number(e.node?.volume24h ?? 0),
+    return exploreEdges(res).map((edge) => ({
+      address: (edge.node?.address ?? "").toLowerCase(),
+      symbol: edge.node?.symbol ?? null,
+      name: edge.node?.name ?? null,
+      marketCap: Number(edge.node?.marketCap ?? 0),
+      volume24h: Number(edge.node?.volume24h ?? 0),
     }));
-  } catch (err) {
-    console.error("Failed to get top gainers:", err);
+  } catch (error) {
+    console.error("Failed to get top gainers:", error);
     return [];
   }
 }
@@ -260,16 +271,15 @@ export async function getRecentlyTraded(limit = 30): Promise<Array<{
 }>> {
   try {
     const res = await getCoinsLastTradedUnique({ count: limit });
-    const edges = res?.data?.exploreList?.edges ?? [];
-    return edges.map((e: any) => ({
-      address: (e.node?.address ?? "").toLowerCase(),
-      symbol: e.node?.symbol ?? null,
-      name: e.node?.name ?? null,
-      marketCap: Number(e.node?.marketCap ?? 0),
-      volume24h: Number(e.node?.volume24h ?? 0),
+    return exploreEdges(res).map((edge) => ({
+      address: (edge.node?.address ?? "").toLowerCase(),
+      symbol: edge.node?.symbol ?? null,
+      name: edge.node?.name ?? null,
+      marketCap: Number(edge.node?.marketCap ?? 0),
+      volume24h: Number(edge.node?.volume24h ?? 0),
     }));
-  } catch (err) {
-    console.error("Failed to get recently traded:", err);
+  } catch (error) {
+    console.error("Failed to get recently traded:", error);
     return [];
   }
 }
@@ -294,10 +304,11 @@ export async function getCoinCommentSignals(
       count: limit,
     });
 
-    const edges = res?.data?.zora20Token?.zoraComments?.edges ?? [];
+    const edges = commentEdges(res);
     const signals: CommentSignal[] = [];
 
     for (const edge of edges) {
+      if (!edge.node) continue;
       const node = edge.node;
       const addr = (node.userAddress ?? "").toLowerCase();
       const isHolder = holderAddresses.has(addr);
@@ -307,15 +318,15 @@ export async function getCoinCommentSignals(
         commenterAddress: addr,
         commenterHandle: node.userProfile?.handle ?? null,
         comment: node.comment ?? "",
-        timestamp: node.timestamp ?? 0,
+        timestamp: Number(node.timestamp ?? 0),
         isHolder,
         holderBalance: holderBalanceMap.get(addr) ?? 0,
       });
     }
 
     return signals;
-  } catch (err) {
-    console.error(`Failed to get comments for ${coinAddress}:`, err);
+  } catch (error) {
+    console.error(`Failed to get comments for ${coinAddress}:`, error);
     return [];
   }
 }
@@ -547,21 +558,21 @@ export async function runScout(engine: IntelligenceEngine): Promise<ScoutReport>
   }
 
   type SdkMomentum = { swapCount: number; buys: number; sells: number; volumeUsdc: number };
-  let sdkMomentumMap = new Map<string, SdkMomentum>();
+  const sdkMomentumMap = new Map<string, SdkMomentum>();
 
   if (missingDataCoins.length > 0) {
     console.log(`[scout] Fetching market data for ${missingDataCoins.length} holder-overlap coins without local analytics...`);
     const BATCH_SIZE = 5;
     for (let i = 0; i < missingDataCoins.length; i += BATCH_SIZE) {
       const batch = missingDataCoins.slice(i, i + BATCH_SIZE);
-      const results = await Promise.allSettled(
+      await Promise.allSettled(
         batch.map(async (addr) => {
           try {
             const [coinResp, swapsResp] = await Promise.all([
               getCoin({ address: addr, chainId: CHAIN_ID }),
               getCoinSwaps({ address: addr, chainId: CHAIN_ID, count: 20 }).catch(() => null),
             ]);
-            const coinData = coinResp?.data?.coin;
+            const coinData = coinResp.data?.coin;
             if (coinData) {
               const entry = candidateMap.get(addr);
               if (entry) {
@@ -573,17 +584,21 @@ export async function runScout(engine: IntelligenceEngine): Promise<ScoutReport>
               }
             }
             // Derive basic momentum from recent swaps
-            if (swapsResp?.data?.coinSwaps?.edges?.length) {
-              const swaps = swapsResp.data.coinSwaps.edges.map((e: any) => e.node);
+            const swaps = swapsResp
+              ? coinSwapEdges(swapsResp).flatMap((edge) => (edge.node ? [edge.node] : []))
+              : [];
+            if (swaps.length > 0) {
               const oneHourAgo = Date.now() - 60 * 60 * 1000;
-              const recentSwaps = swaps.filter((s: any) =>
-                new Date(s.timestamp || s.createdAt || 0).getTime() > oneHourAgo
+              const recentSwaps = swaps.filter((swap) =>
+                new Date(swap.timestamp ?? swap.createdAt ?? 0).getTime() > oneHourAgo
               );
               // Store estimated momentum for this coin (swap count as proxy)
-              const buys = recentSwaps.filter((s: any) => s.type === "BUY" || s.isBuy).length;
-              const sells = recentSwaps.filter((s: any) => s.type === "SELL" || !s.isBuy).length;
-              const totalVol = recentSwaps.reduce((sum: number, s: any) =>
-                sum + Number(s.amountUsdc ?? s.amount_usdc ?? 0), 0);
+              const buys = recentSwaps.filter((swap) => swap.type === "BUY" || swap.isBuy).length;
+              const sells = recentSwaps.filter((swap) => swap.type === "SELL" || !swap.isBuy).length;
+              const totalVol = recentSwaps.reduce(
+                (sum, swap) => sum + Number(swap.amountUsdc ?? swap.amount_usdc ?? 0),
+                0,
+              );
               sdkMomentumMap.set(addr, {
                 swapCount: recentSwaps.length,
                 buys,
@@ -591,7 +606,7 @@ export async function runScout(engine: IntelligenceEngine): Promise<ScoutReport>
                 volumeUsdc: totalVol,
               });
             }
-          } catch (err) {
+          } catch {
             // Non-fatal — just means we won't have market data for this coin
           }
         })
@@ -787,7 +802,7 @@ async function main() {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   main().catch((err) => {
-    console.error("Scout fatal:", err);
+    console.error("Scout fatal:", messageFromError(err));
     process.exit(1);
   });
 }

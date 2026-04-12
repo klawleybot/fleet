@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
-import * as zoraSdk from "@zoralabs/coins-sdk";
 import { isAddress } from "viem";
 import { applySchema } from "./schema.js";
 import { dedupeAlertRows, type AlertRow } from "./alerts-dedupe.js";
@@ -11,13 +10,17 @@ import { TrendCoinIndexer, applyTrendSchema } from "./trend-coins.js";
 import { TrendScorer } from "./trend-scorer.js";
 import { addBadActor as _addBadActor, removeBadActor as _removeBadActor, listBadActors as _listBadActors, isBadActor as _isBadActor, getBadActorHoldings as _getBadActorHoldings, detectFSH as _detectFSH, cacheBadActorHoldings, getCachedBadActorHoldings, formatBadActorWarning, type BadActor, type BadActorHolding } from "./bad-actors.js";
 import { BadActorTracker } from "./bad-actor-tracker.js";
-
-// SDK function references (loosely-typed to handle SDK export quirks)
-const getCoinSwaps = (zoraSdk as any).getCoinSwaps as (args: any) => Promise<any>;
-const getCoinsNew = (zoraSdk as any).getCoinsNew as (args: any) => Promise<any>;
-const getCoinsTopVolume24h = (zoraSdk as any).getCoinsTopVolume24h as (args: any) => Promise<any>;
-const getCoin = (zoraSdk as any).getCoin as (args: any) => Promise<any>;
-const setApiKey = (zoraSdk as any).setApiKey as ((apiKey: string) => void) | undefined;
+import {
+  coinSwapEdges,
+  exploreEdges,
+  getCoin,
+  getCoinsNew,
+  getCoinsTopVolume24h,
+  getCoinSwaps,
+  setApiKey,
+  type CoinNode,
+  type CoinSwapNode,
+} from "./zora-sdk.js";
 
 // ============================================================
 // Types
@@ -99,6 +102,120 @@ export type DispatchAlertsRich = {
   media: Array<{ coinAddress: string; symbol: string | null; name: string | null; filePath: string }>;
 };
 
+export interface CoinListRow {
+  address: string;
+  symbol: string | null;
+  name: string | null;
+  created_at: string | null;
+  volume_24h: number | null;
+  market_cap: number | null;
+  coin_url: string | null;
+}
+
+export interface CoinAnalyticsRow {
+  coin_address: string;
+  symbol: string | null;
+  name: string | null;
+  market_cap: number | null;
+  volume_24h: number | null;
+  swap_count_1h: number | null;
+  unique_traders_1h: number | null;
+  buy_count_1h: number | null;
+  sell_count_1h: number | null;
+  buy_volume_usdc_1h: number | null;
+  sell_volume_usdc_1h: number | null;
+  net_flow_usdc_1h: number | null;
+  momentum_score_1h: number | null;
+  momentum_acceleration_1h: number | null;
+  swap_count_24h: number | null;
+  unique_traders_24h: number | null;
+  net_flow_usdc_24h: number | null;
+  momentum_score: number | null;
+  coin_url: string | null;
+}
+
+export interface CoinDetailRow extends CoinListRow {
+  total_volume: number | null;
+  creator_address: string | null;
+  chain_id: number | null;
+}
+
+export interface CoinDetailAnalyticsRow {
+  coin_address: string;
+  swap_count_1h: number | null;
+  unique_traders_1h: number | null;
+  buy_count_1h: number | null;
+  sell_count_1h: number | null;
+  buy_volume_usdc_1h: number | null;
+  sell_volume_usdc_1h: number | null;
+  net_flow_usdc_1h: number | null;
+  swap_count_prev_1h: number | null;
+  momentum_score_1h: number | null;
+  momentum_acceleration_1h: number | null;
+  swap_count_24h: number | null;
+  unique_traders_24h: number | null;
+  buy_count_24h: number | null;
+  sell_count_24h: number | null;
+  buy_volume_usdc_24h: number | null;
+  sell_volume_usdc_24h: number | null;
+  net_flow_usdc_24h: number | null;
+  momentum_score: number | null;
+  updated_at: string | null;
+}
+
+export interface CoinDetail {
+  coin: CoinDetailRow | null;
+  analytics: CoinDetailAnalyticsRow | null;
+}
+
+export interface LatestAlertRow {
+  type: string;
+  entity_id: string | null;
+  severity: string;
+  message: string;
+  created_at: string;
+  coin_url: string | null;
+}
+
+export interface WatchlistEntryRow {
+  list_name: string;
+  coin_address: string;
+  label: string | null;
+  notes: string | null;
+  enabled: number;
+  updated_at: string;
+  symbol: string | null;
+  name: string | null;
+  volume_24h: number | null;
+  swap_count_1h: number | null;
+  net_flow_usdc_1h: number | null;
+  momentum_score_1h: number | null;
+  momentum_acceleration_1h: number | null;
+  swap_count_24h: number | null;
+  unique_traders_24h: number | null;
+  net_flow_usdc_24h: number | null;
+  momentum_score: number | null;
+  coin_url: string | null;
+}
+
+export interface WatchlistMoveRow {
+  list_name: string;
+  coin_address: string;
+  label: string;
+  activity_type: string | null;
+  amount_usdc: number | null;
+  sender_address: string | null;
+  recipient_address: string | null;
+  block_timestamp: string;
+  coin_url: string | null;
+}
+
+export interface WatchlistAddResult {
+  listName: string;
+  coinAddress: string;
+  coinUrl: string | null;
+}
+
 // ============================================================
 // Resolved config with defaults
 // ============================================================
@@ -168,12 +285,6 @@ function resolveConfig(input: IntelligenceConfig): ResolvedConfig {
 // Helpers
 // ============================================================
 
-type Edge = { node: any; cursor?: string };
-
-function edgesFromResponse(r: any): Edge[] {
-  return r?.data?.exploreList?.edges ?? [];
-}
-
 function normAddress(v: string) {
   return String(v ?? "").trim().toLowerCase();
 }
@@ -226,6 +337,14 @@ function formatUsd(v: number) {
   return Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 });
 }
 
+function messageFromError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function writeInfoLine(message: string): void {
+  process.stdout.write(`${message}\n`);
+}
+
 const ALERTS_LOG_PATH = "./logs/alerts.log";
 
 function appendAlertLog(line: string) {
@@ -275,8 +394,8 @@ export class IntelligenceEngine {
         ...(process.env.BASE_RPC_URL ? { rpcUrl: process.env.BASE_RPC_URL } : {}),
         maxDepth: 2, // track up to 2 hops
       });
-    } catch (err: any) {
-      console.warn("[engine] bad actor tracker init failed (no RPC?):", err?.message);
+    } catch (error) {
+      console.warn("[engine] bad actor tracker init failed (no RPC?):", messageFromError(error));
       this.badActorTracker = null;
     }
   }
@@ -293,7 +412,8 @@ export class IntelligenceEngine {
   // Coin upsert
   // ============================================================
 
-  private upsertCoin(node: any): void {
+  private upsertCoin(node: CoinNode): void {
+    const creatorAddress = typeof node.creatorAddress === "string" ? node.creatorAddress.toLowerCase() : null;
     this.db.prepare(`
       INSERT INTO coins (
         address, name, symbol, coin_type, creator_address, created_at,
@@ -313,7 +433,7 @@ export class IntelligenceEngine {
       name: node.name ?? null,
       symbol: node.symbol ?? null,
       coin_type: node.coinType ?? null,
-      creator_address: node.creatorAddress?.toLowerCase?.() ?? null,
+      creator_address: creatorAddress,
       created_at: node.createdAt ?? null,
       market_cap: Number(node.marketCap ?? 0),
       volume_24h: Number(node.volume24h ?? 0),
@@ -331,8 +451,10 @@ export class IntelligenceEngine {
   async syncRecentCoins(count?: number): Promise<number> {
     const c = count ?? this.cfg.trackedCoinCount;
     const r = await getCoinsNew({ count: c });
-    const edges = edgesFromResponse(r);
-    for (const edge of edges) this.upsertCoin(edge.node);
+    const edges = exploreEdges(r);
+    for (const edge of edges) {
+      if (edge.node) this.upsertCoin(edge.node);
+    }
     this.db.prepare("INSERT INTO sync_runs(source, count, created_at) VALUES (?, ?, ?)")
       .run("getCoinsNew", edges.length, new Date().toISOString());
     return edges.length;
@@ -341,8 +463,10 @@ export class IntelligenceEngine {
   async syncTopVolumeCoins(count?: number): Promise<number> {
     const c = count ?? this.cfg.trackedCoinCount;
     const r = await getCoinsTopVolume24h({ count: c });
-    const edges = edgesFromResponse(r);
-    for (const edge of edges) this.upsertCoin(edge.node);
+    const edges = exploreEdges(r);
+    for (const edge of edges) {
+      if (edge.node) this.upsertCoin(edge.node);
+    }
     this.db.prepare("INSERT INTO sync_runs(source, count, created_at) VALUES (?, ?, ?)")
       .run("getCoinsTopVolume24h", edges.length, new Date().toISOString());
     return edges.length;
@@ -379,10 +503,14 @@ export class IntelligenceEngine {
           chain: coin.chain_id || this.cfg.zoraChainId,
           first: spc,
         });
-        const edges = res?.data?.zora20Token?.swapActivities?.edges ?? [];
-        for (const edge of edges) totalInserted += this.upsertSwap(coin.address, coin.chain_id || this.cfg.zoraChainId, edge.node);
-      } catch (err) {
-        console.error(`swap ingestion failed for ${coin.address}:`, err);
+        const edges = coinSwapEdges(res);
+        for (const edge of edges) {
+          if (edge.node) {
+            totalInserted += this.upsertSwap(coin.address, coin.chain_id || this.cfg.zoraChainId, edge.node);
+          }
+        }
+      } catch (error) {
+        console.error(`swap ingestion failed for ${coin.address}:`, error);
       }
     }
 
@@ -391,7 +519,7 @@ export class IntelligenceEngine {
     return totalInserted;
   }
 
-  private upsertSwap(coinAddress: string, chainId: number, swap: any): number {
+  private upsertSwap(coinAddress: string, chainId: number, swap: CoinSwapNode): number {
     const sender = String(swap.senderAddress ?? "").toLowerCase();
     const recipient = String(swap.recipientAddress ?? "").toLowerCase();
     const ts = swap.blockTimestamp ?? new Date().toISOString();
@@ -413,7 +541,7 @@ export class IntelligenceEngine {
     );
 
     if (result.changes > 0) {
-      if (sender) this.upsertAddressStats(sender, ts, swap.activityType, amountUsdc, swap.senderProfile?.handle);
+      if (sender) this.upsertAddressStats(sender, ts, swap.activityType, amountUsdc, swap.senderProfile?.handle ?? undefined);
       if (recipient) this.upsertAddressStats(recipient, ts, null, amountUsdc, undefined);
       if (sender && recipient && sender !== recipient) this.upsertInteraction(sender, recipient, ts);
     }
@@ -509,6 +637,23 @@ export class IntelligenceEngine {
   // ============================================================
 
   refreshAnalytics(): number {
+    type AnalyticsAggregationRow = {
+      coin_address: string;
+      buy_volume_usdc_1h: number | null;
+      sell_volume_usdc_1h: number | null;
+      swap_count_1h: number | null;
+      unique_traders_1h: number | null;
+      swap_count_prev_1h: number | null;
+      buy_volume_usdc_24h: number | null;
+      sell_volume_usdc_24h: number | null;
+      swap_count_24h: number | null;
+      unique_traders_24h: number | null;
+      buy_count_1h: number | null;
+      sell_count_1h: number | null;
+      buy_count_24h: number | null;
+      sell_count_24h: number | null;
+    };
+
     const rows = this.db.prepare(`
       SELECT
         coin_address,
@@ -528,7 +673,7 @@ export class IntelligenceEngine {
       FROM coin_swaps
       WHERE datetime(block_timestamp) >= datetime('now', '-1 day')
       GROUP BY coin_address
-    `).all() as Array<any>;
+    `).all() as AnalyticsAggregationRow[];
 
     const upsert = this.db.prepare(`
       INSERT INTO coin_analytics (
@@ -590,6 +735,17 @@ export class IntelligenceEngine {
     const cfg = this.cfg;
     const alerts: Array<{ type: string; entity_id: string; severity: string; message: string; fingerprint: string }> = [];
 
+    type ActivityAlertRow = {
+      coin_address: string;
+      chain_id: number | null;
+      swap_count_1h: number | null;
+      swap_count_prev_1h: number | null;
+      momentum_score_1h: number | null;
+      momentum_acceleration_1h: number | null;
+      swap_count_24h: number | null;
+      momentum_score: number | null;
+    };
+
     const hotCoins = this.db.prepare(`
       SELECT a.coin_address, c.chain_id,
              a.swap_count_1h, a.swap_count_prev_1h,
@@ -598,7 +754,7 @@ export class IntelligenceEngine {
       FROM coin_analytics a LEFT JOIN coins c ON c.address = a.coin_address
       WHERE a.swap_count_1h >= ? AND a.momentum_score_1h >= ? AND a.momentum_acceleration_1h >= ?
       ORDER BY a.momentum_score_1h DESC LIMIT ?
-    `).all(cfg.alertCoinSwaps1h, cfg.alertMinMomentum1h, cfg.alertMinAcceleration1h, cfg.alertMaxCoinAlertsPerRun) as Array<any>;
+    `).all(cfg.alertCoinSwaps1h, cfg.alertMinMomentum1h, cfg.alertMinAcceleration1h, cfg.alertMaxCoinAlertsPerRun) as ActivityAlertRow[];
 
     for (const c of hotCoins) {
       alerts.push({
@@ -622,7 +778,7 @@ export class IntelligenceEngine {
       WHERE a.swap_count_1h >= ? AND a.momentum_acceleration_1h >= ?
         AND a.swap_count_prev_1h > 0
       ORDER BY a.momentum_acceleration_1h DESC LIMIT ?
-    `).all(cfg.alertAccelSpikeMinSwaps1h, cfg.alertAccelSpikeMinAcceleration1h, cfg.alertMaxCoinAlertsPerRun) as Array<any>;
+    `).all(cfg.alertAccelSpikeMinSwaps1h, cfg.alertAccelSpikeMinAcceleration1h, cfg.alertMaxCoinAlertsPerRun) as ActivityAlertRow[];
 
     for (const c of accelSpikes) {
       alerts.push({
@@ -636,12 +792,20 @@ export class IntelligenceEngine {
       });
     }
 
+    type WhaleAlertRow = {
+      id: string;
+      coin_address: string;
+      chain_id: number | null;
+      sender_address: string | null;
+      amount_usdc: number | null;
+    };
+
     const whales = this.db.prepare(`
       SELECT s.id, s.coin_address, c.chain_id, s.sender_address, s.amount_usdc
       FROM coin_swaps s LEFT JOIN coins c ON c.address = s.coin_address
       WHERE s.amount_usdc >= ? AND datetime(s.block_timestamp) >= datetime('now', '-1 day')
       ORDER BY s.amount_usdc DESC LIMIT 3
-    `).all(cfg.alertWhaleSwapUsd * 1.5) as Array<any>;
+    `).all(cfg.alertWhaleSwapUsd * 1.5) as WhaleAlertRow[];
 
     for (const w of whales) {
       alerts.push({
@@ -672,8 +836,8 @@ export class IntelligenceEngine {
           fingerprint: `chart_murder:${fsh.address}:${fsh.coinAddress}:${new Date().toISOString().slice(0, 13)}`,
         });
       }
-    } catch (err: any) {
-      console.warn("[engine] chart murder detection error:", err?.message);
+    } catch (error) {
+      console.warn("[engine] chart murder detection error:", messageFromError(error));
     }
 
     alerts.push(...this.watchlistAlertCandidates());
@@ -689,7 +853,7 @@ export class IntelligenceEngine {
       if (r.changes > 0) {
         newCount += 1;
         const line = `${new Date().toISOString()} [ALERT:${a.severity}] ${a.message}`;
-        console.log(line);
+        writeInfoLine(line);
         appendAlertLog(line);
       }
     }
@@ -698,6 +862,22 @@ export class IntelligenceEngine {
 
   private watchlistAlertCandidates(): Array<{ type: string; entity_id: string; severity: string; message: string; fingerprint: string }> {
     const cfg = this.cfg;
+    type WatchlistCandidateRow = {
+      list_name: string | null;
+      coin_address: string;
+      label: string | null;
+      symbol: string | null;
+      name: string | null;
+      chain_id: number | null;
+      volume_24h: number | null;
+      swap_count_1h: number | null;
+      net_flow_usdc_1h: number | null;
+      momentum_score_1h: number | null;
+      momentum_acceleration_1h: number | null;
+      swap_count_24h: number | null;
+      net_flow_usdc_24h: number | null;
+    };
+
     const wl = this.db.prepare(`
       SELECT w.list_name, w.coin_address, w.label, c.symbol, c.name, c.chain_id, c.volume_24h,
              a.swap_count_1h, a.net_flow_usdc_1h, a.momentum_score_1h, a.momentum_acceleration_1h,
@@ -706,7 +886,7 @@ export class IntelligenceEngine {
       LEFT JOIN coins c ON c.address = w.coin_address
       LEFT JOIN coin_analytics a ON a.coin_address = w.coin_address
       WHERE w.enabled = 1
-    `).all() as Array<any>;
+    `).all() as WatchlistCandidateRow[];
 
     const nowHour = new Date().toISOString().slice(0, 13);
     const alerts: Array<{ type: string; entity_id: string; severity: string; message: string; fingerprint: string }> = [];
@@ -716,10 +896,16 @@ export class IntelligenceEngine {
       const addr = w.coin_address;
       const listName = w.list_name || "default";
 
+      type MoveSummaryRow = {
+        large_swaps_1h: number | null;
+        max_swap_usdc: number | null;
+        total_large_swap_usdc: number | null;
+      };
+
       const moveSummary = this.db.prepare(`
         SELECT COUNT(*) AS large_swaps_1h, MAX(amount_usdc) AS max_swap_usdc, SUM(amount_usdc) AS total_large_swap_usdc
         FROM coin_swaps WHERE coin_address = ? AND datetime(block_timestamp) >= datetime('now', '-1 hour') AND amount_usdc >= ?
-      `).get(addr, cfg.watchlistMinSwapUsd) as any;
+      `).get(addr, cfg.watchlistMinSwapUsd) as MoveSummaryRow | undefined;
 
       const largeSwaps1h = Number(moveSummary?.large_swaps_1h ?? 0);
       const maxSwap1h = Number(moveSummary?.max_swap_usdc ?? 0);
@@ -771,16 +957,16 @@ export class IntelligenceEngine {
     // Trend coin indexing — runs every tick alongside the main loop
     try {
       const trendResult = await this.trendIndexer.tick();
-      console.log(`[engine] trend tick: chain=${trendResult.chainEvents} api=${trendResult.apiDiscovered} enriched=${trendResult.enriched} alerts=${trendResult.alerts}`);
-    } catch (err: any) {
-      console.warn("[engine] trend indexer error:", err?.message);
+      writeInfoLine(`[engine] trend tick: chain=${trendResult.chainEvents} api=${trendResult.apiDiscovered} enriched=${trendResult.enriched} alerts=${trendResult.alerts}`);
+    } catch (error) {
+      console.warn("[engine] trend indexer error:", messageFromError(error));
     }
 
     // Refresh bad actor holdings cache
     try {
       await this.refreshBadActorHoldings();
-    } catch (err: any) {
-      console.warn("[engine] bad actor holdings refresh error:", err?.message);
+    } catch (error) {
+      console.warn("[engine] bad actor holdings refresh error:", messageFromError(error));
     }
 
     // Bad actor cluster tracking — scan for fund transfers
@@ -788,11 +974,11 @@ export class IntelligenceEngine {
       if (this.badActorTracker) {
         const trackerResult = await this.badActorTracker.tick();
         if (trackerResult.transfersDetected > 0 || trackerResult.autoAdded > 0) {
-          console.log(`[engine] bad actor tracker: scanned=${trackerResult.scannedBlocks} transfers=${trackerResult.transfersDetected} auto-added=${trackerResult.autoAdded}`);
+          writeInfoLine(`[engine] bad actor tracker: scanned=${trackerResult.scannedBlocks} transfers=${trackerResult.transfersDetected} auto-added=${trackerResult.autoAdded}`);
         }
       }
-    } catch (err: any) {
-      console.warn("[engine] bad actor tracker error:", err?.message);
+    } catch (error) {
+      console.warn("[engine] bad actor tracker error:", messageFromError(error));
     }
 
     return { syncedRecent, syncedTop, swaps, clusters, analytics, alerts };
@@ -802,27 +988,27 @@ export class IntelligenceEngine {
   // Read-only queries
   // ============================================================
 
-  recentCoins(limit = 20): any[] {
+  recentCoins(limit = 20): CoinListRow[] {
     return this.db.prepare(`
       SELECT address, symbol, name, created_at, volume_24h, market_cap,
              CASE WHEN chain_id = 84532 THEN 'https://zora.co/coin/base-sepolia:' || lower(address)
                   ELSE 'https://zora.co/coin/base:' || lower(address)
              END AS coin_url
       FROM coins ORDER BY datetime(created_at) DESC LIMIT ?
-    `).all(limit);
+    `).all(limit) as CoinListRow[];
   }
 
-  topVolumeCoins(limit = 20): any[] {
+  topVolumeCoins(limit = 20): CoinListRow[] {
     return this.db.prepare(`
       SELECT address, symbol, name, created_at, volume_24h, market_cap,
              CASE WHEN chain_id = 84532 THEN 'https://zora.co/coin/base-sepolia:' || lower(address)
                   ELSE 'https://zora.co/coin/base:' || lower(address)
              END AS coin_url
       FROM coins ORDER BY volume_24h DESC LIMIT ?
-    `).all(limit);
+    `).all(limit) as CoinListRow[];
   }
 
-  topAnalytics(limit = 20): any[] {
+  topAnalytics(limit = 20): CoinAnalyticsRow[] {
     return this.db.prepare(`
       SELECT a.coin_address, c.symbol, c.name, c.market_cap, c.volume_24h,
              a.swap_count_1h, a.unique_traders_1h, a.buy_count_1h, a.sell_count_1h,
@@ -834,10 +1020,10 @@ export class IntelligenceEngine {
              END AS coin_url
       FROM coin_analytics a LEFT JOIN coins c ON c.address = a.coin_address
       ORDER BY a.momentum_score_1h DESC, a.momentum_score DESC LIMIT ?
-    `).all(limit);
+    `).all(limit) as CoinAnalyticsRow[];
   }
 
-  getCoinDetail(address: string): any {
+  getCoinDetail(address: string): CoinDetail {
     const addr = normAddress(address);
     const coin = this.db.prepare(`
       SELECT address, symbol, name, created_at, volume_24h, market_cap, total_volume, creator_address, chain_id,
@@ -845,17 +1031,17 @@ export class IntelligenceEngine {
                   ELSE 'https://zora.co/coin/base:' || lower(address)
              END AS coin_url
       FROM coins WHERE address = ?
-    `).get(addr);
-    const analytics = this.db.prepare(`SELECT * FROM coin_analytics WHERE coin_address = ?`).get(addr);
+    `).get(addr) as CoinDetailRow | undefined;
+    const analytics = this.db.prepare(`SELECT * FROM coin_analytics WHERE coin_address = ?`).get(addr) as CoinDetailAnalyticsRow | undefined;
     return { coin: coin ?? null, analytics: analytics ?? null };
   }
 
-  latestAlerts(limit = 20): any[] {
+  latestAlerts(limit = 20): LatestAlertRow[] {
     return this.db.prepare(`
       SELECT type, entity_id, severity, message, created_at,
              CASE WHEN entity_id LIKE '0x%' THEN 'https://zora.co/coin/base:' || lower(entity_id) ELSE NULL END AS coin_url
       FROM alerts ORDER BY id DESC LIMIT ?
-    `).all(limit);
+    `).all(limit) as LatestAlertRow[];
   }
 
   coinCount(): number {
@@ -872,7 +1058,7 @@ export class IntelligenceEngine {
   // Watchlist
   // ============================================================
 
-  watchlistAdd(coinAddress: string, listName = "default", label?: string, notes?: string): any {
+  watchlistAdd(coinAddress: string, listName = "default", label?: string, notes?: string): WatchlistAddResult {
     const addr = normAddress(coinAddress);
     if (!addr || !addr.startsWith("0x")) throw new Error("Invalid coin address");
     const now = new Date().toISOString();
@@ -892,7 +1078,7 @@ export class IntelligenceEngine {
     return r.changes;
   }
 
-  watchlistList(listName = "default"): any[] {
+  watchlistList(listName = "default"): WatchlistEntryRow[] {
     return this.db.prepare(`
       SELECT w.list_name, w.coin_address, w.label, w.notes, w.enabled, w.updated_at,
              c.symbol, c.name, c.volume_24h,
@@ -906,10 +1092,10 @@ export class IntelligenceEngine {
       LEFT JOIN coin_analytics a ON a.coin_address = w.coin_address
       WHERE w.list_name = ?
       ORDER BY w.enabled DESC, COALESCE(a.momentum_score, 0) DESC, w.updated_at DESC
-    `).all(listName);
+    `).all(listName) as WatchlistEntryRow[];
   }
 
-  watchlistMoves(listName = "default", limit = 25): any[] {
+  watchlistMoves(listName = "default", limit = 25): WatchlistMoveRow[] {
     return this.db.prepare(`
       SELECT w.list_name, w.coin_address, COALESCE(w.label, c.symbol, c.name, w.coin_address) label,
              s.activity_type, s.amount_usdc, s.sender_address, s.recipient_address, s.block_timestamp,
@@ -921,7 +1107,7 @@ export class IntelligenceEngine {
       LEFT JOIN coins c ON c.address = w.coin_address
       WHERE w.list_name = ? AND w.enabled = 1
       ORDER BY datetime(s.block_timestamp) DESC LIMIT ?
-    `).all(listName, limit);
+    `).all(listName, limit) as WatchlistMoveRow[];
   }
 
   watchlistCount(listName?: string): number {
@@ -938,6 +1124,17 @@ export class IntelligenceEngine {
   // ============================================================
 
   topMovers(input?: { limit?: number; minMomentum?: number }): ZoraSignalCoin[] {
+    type SignalQueryRow = {
+      coin_address: string;
+      symbol: string | null;
+      name: string | null;
+      chain_id: number | null;
+      momentum_score: number | null;
+      swap_count_24h: number | null;
+      net_flow_usdc_24h: number | null;
+      volume_24h: number | null;
+    };
+
     const limit = Math.max(1, Math.min(50, input?.limit ?? 10));
     const minMomentum = Number(input?.minMomentum ?? 0);
 
@@ -950,7 +1147,7 @@ export class IntelligenceEngine {
       FROM coin_analytics a LEFT JOIN coins c ON c.address = a.coin_address
       WHERE COALESCE(a.momentum_score, 0) >= ?
       ORDER BY a.momentum_score DESC LIMIT ?
-    `).all(minMomentum, limit) as Array<any>;
+    `).all(minMomentum, limit) as SignalQueryRow[];
 
     return rows
       .filter((r) => typeof r.coin_address === "string" && isAddress(r.coin_address))
@@ -967,6 +1164,17 @@ export class IntelligenceEngine {
   }
 
   watchlistSignals(input?: { listName?: string; limit?: number }): ZoraSignalCoin[] {
+    type SignalQueryRow = {
+      coin_address: string;
+      symbol: string | null;
+      name: string | null;
+      chain_id: number | null;
+      momentum_score: number | null;
+      swap_count_24h: number | null;
+      net_flow_usdc_24h: number | null;
+      volume_24h: number | null;
+    };
+
     const limit = Math.max(1, Math.min(50, input?.limit ?? 10));
     const listName = input?.listName?.trim() || null;
 
@@ -981,7 +1189,7 @@ export class IntelligenceEngine {
       LEFT JOIN coin_analytics a ON a.coin_address = w.coin_address
       WHERE w.enabled = 1 AND (? IS NULL OR w.list_name = ?)
       ORDER BY COALESCE(a.momentum_score, 0) DESC LIMIT ?
-    `).all(listName, listName, limit) as Array<any>;
+    `).all(listName, listName, limit) as SignalQueryRow[];
 
     return rows
       .filter((r) => typeof r.coin_address === "string" && isAddress(r.coin_address))
@@ -1013,6 +1221,16 @@ export class IntelligenceEngine {
     accelerationThreshold?: number;
     netFlowMinUsdc?: number;
   }): PumpSignal[] {
+    type PumpQueryRow = {
+      coin_address: string;
+      symbol: string | null;
+      name: string | null;
+      chain_id: number | null;
+      momentum_acceleration_1h: number | null;
+      net_flow_usdc_1h: number | null;
+      momentum_score: number | null;
+    };
+
     const threshold = input.accelerationThreshold ?? 3.0;
     const netFlowMin = input.netFlowMinUsdc ?? 0;
     if (input.coinAddresses.length === 0) return [];
@@ -1028,7 +1246,7 @@ export class IntelligenceEngine {
         AND COALESCE(a.momentum_acceleration_1h, 0) >= ?
         AND COALESCE(a.net_flow_usdc_1h, 0) >= ?
       ORDER BY a.momentum_acceleration_1h DESC
-    `).all(...input.coinAddresses.map((a) => a.toLowerCase()), threshold, netFlowMin) as Array<any>;
+    `).all(...input.coinAddresses.map((a) => a.toLowerCase()), threshold, netFlowMin) as PumpQueryRow[];
 
     return rows
       .filter((r) => typeof r.coin_address === "string" && isAddress(r.coin_address))
@@ -1049,6 +1267,17 @@ export class IntelligenceEngine {
     minSwapCount24h?: number;
     listName?: string;
   }): DipSignal[] {
+    type DipQueryRow = {
+      coin_address: string;
+      symbol: string | null;
+      name: string | null;
+      chain_id: number | null;
+      momentum_acceleration_1h: number | null;
+      net_flow_usdc_1h: number | null;
+      swap_count_24h: number | null;
+      momentum_score: number | null;
+    };
+
     const threshold = input.accelerationThreshold ?? 0.5;
     const minSwaps = input.minSwapCount24h ?? 10;
 
@@ -1067,9 +1296,9 @@ export class IntelligenceEngine {
         AND COALESCE(a.swap_count_24h, 0) >= ?
         AND COALESCE(a.net_flow_usdc_1h, 0) < 0
       ORDER BY a.net_flow_usdc_1h ASC
-    `).all(input.listName ?? null, input.listName ?? null, threshold, minSwaps) as Array<any>;
+    `).all(input.listName ?? null, input.listName ?? null, threshold, minSwaps) as DipQueryRow[];
 
-    let tradedRows: Array<any> = [];
+    let tradedRows: DipQueryRow[] = [];
     if (input.previouslyTradedAddresses && input.previouslyTradedAddresses.length > 0) {
       const placeholders = input.previouslyTradedAddresses.map(() => "?").join(",");
       tradedRows = this.db.prepare(`
@@ -1084,7 +1313,7 @@ export class IntelligenceEngine {
           AND COALESCE(a.swap_count_24h, 0) >= ?
           AND COALESCE(a.net_flow_usdc_1h, 0) < 0
         ORDER BY a.net_flow_usdc_1h ASC
-      `).all(...input.previouslyTradedAddresses.map((a) => a.toLowerCase()), threshold, minSwaps) as Array<any>;
+      `).all(...input.previouslyTradedAddresses.map((a) => a.toLowerCase()), threshold, minSwaps) as DipQueryRow[];
     }
 
     const seen = new Set<string>();
@@ -1209,8 +1438,8 @@ export class IntelligenceEngine {
           cacheBadActorHoldings(this.db, holdings);
           cached += holdings.length;
         }
-      } catch (err: any) {
-        console.warn(`[bad-actors] holdings refresh failed for ${coin_address}:`, err?.message);
+      } catch (error) {
+        console.warn(`[bad-actors] holdings refresh failed for ${coin_address}:`, messageFromError(error));
       }
     }
     return cached;
@@ -1238,6 +1467,14 @@ export class IntelligenceEngine {
     rows: Array<{ id: number; type: string; entity_id: string | null; severity: string; message: string }>,
     suppressedCount = 0,
   ) {
+    type DispatchCoinContextRow = {
+      symbol: string | null;
+      name: string | null;
+      chain_id: number | null;
+      market_cap: number | null;
+      momentum_acceleration_1h: number | null;
+    };
+
     const coinCtxStmt = this.db.prepare(`
       SELECT c.symbol, c.name, c.chain_id, c.market_cap, a.momentum_acceleration_1h
       FROM coins c LEFT JOIN coin_analytics a ON a.coin_address = c.address
@@ -1249,7 +1486,7 @@ export class IntelligenceEngine {
 
     const lines = rows.map((r) => {
       const sev = r.severity.toUpperCase();
-      const ctx = r.entity_id ? (coinCtxStmt.get(r.entity_id) as any) : null;
+      const ctx = r.entity_id ? (coinCtxStmt.get(r.entity_id) as DispatchCoinContextRow | undefined) : undefined;
       const symbol = String(ctx?.symbol ?? "").trim();
       const name = String(ctx?.name ?? "").trim();
       const coinLabel = symbol || name ? `${symbol || "?"} / ${name || symbol || "?"}` : "unknown / unknown";
@@ -1306,7 +1543,11 @@ export class IntelligenceEngine {
     for (const row of dedupedRows) {
       const entity = String(row.entity_id ?? "").toLowerCase();
       if (!entity || metaByEntity.has(entity)) continue;
-      const r = entityMetaStmt.get(`-${Math.max(1, this.cfg.alertNoveltyWindowHours)} hours`, entity) as any;
+      const r = entityMetaStmt.get(`-${Math.max(1, this.cfg.alertNoveltyWindowHours)} hours`, entity) as {
+        last_sent_at: string | null;
+        recent_count: number | null;
+        market_cap: number | null;
+      } | undefined;
       metaByEntity.set(entity, { lastSentAt: r?.last_sent_at ?? null, recentCount: Number(r?.recent_count ?? 0), marketCap: Number(r?.market_cap ?? 0) });
     }
 

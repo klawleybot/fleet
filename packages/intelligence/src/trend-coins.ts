@@ -9,16 +9,17 @@
  * Stores everything in the intelligence DB and generates alerts.
  */
 
-import { createPublicClient, http, parseAbiItem, type Address, formatEther } from "viem";
+import { createPublicClient, http, parseAbiItem, type Address } from "viem";
 import { base } from "viem/chains";
 import Database from "better-sqlite3";
-import * as zoraSdk from "@zoralabs/coins-sdk";
-
-// SDK function references
-const getCoinsLastTraded = (zoraSdk as any).getCoinsLastTraded as (args: any) => Promise<any>;
-const getCoinsLastTradedUnique = (zoraSdk as any).getCoinsLastTradedUnique as (args: any) => Promise<any>;
-const getCoin = (zoraSdk as any).getCoin as (args: any) => Promise<any>;
-const setApiKey = (zoraSdk as any).setApiKey as ((apiKey: string) => void) | undefined;
+import {
+  exploreEdges,
+  getCoin,
+  getCoinsLastTraded,
+  getCoinsLastTradedUnique,
+  setApiKey,
+  type CoinNode,
+} from "./zora-sdk.js";
 
 // ZoraFactory on Base mainnet
 const ZORA_FACTORY = "0x777777751622c0d3258f214F9DF38E35BF45baF3" as Address;
@@ -54,6 +55,14 @@ export interface TrendCoinSnapshot {
   unique_holders: number;
   price_usdc: number;
   timestamp: string;
+}
+
+function messageFromError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function writeInfoLine(message: string): void {
+  process.stdout.write(`${message}\n`);
 }
 
 /**
@@ -149,14 +158,15 @@ export class TrendCoinIndexer {
         fromBlock,
         toBlock,
       });
-    } catch (err: any) {
+    } catch (error) {
       // If the event doesn't exist on this factory version, skip gracefully
-      if (err?.message?.includes("invalid") || err?.message?.includes("unknown")) {
+      const message = messageFromError(error);
+      if (message.includes("invalid") || message.includes("unknown")) {
         console.warn("[trend-indexer] TrendCoinCreated event not found on factory, likely older version");
         this.setLastScannedBlock(toBlock);
         return 0;
       }
-      throw err;
+      throw error;
     }
 
     const now = new Date().toISOString();
@@ -172,8 +182,8 @@ export class TrendCoinIndexer {
 
     let count = 0;
     for (const log of logs) {
-      const args = log.args as any;
-      if (!args?.coin) continue;
+      const args = log.args as { coin?: Address; symbol?: string; caller?: Address };
+      if (!args.coin) continue;
 
       upsert.run({
         address: String(args.coin).toLowerCase(),
@@ -188,7 +198,7 @@ export class TrendCoinIndexer {
     }
 
     this.setLastScannedBlock(toBlock);
-    console.log(`[trend-indexer] Scanned blocks ${fromBlock}-${toBlock}, found ${count} new trend coins`);
+    writeInfoLine(`[trend-indexer] Scanned blocks ${fromBlock}-${toBlock}, found ${count} new trend coins`);
     return count;
   }
 
@@ -203,9 +213,10 @@ export class TrendCoinIndexer {
     for (const fetcher of [getCoinsLastTraded, getCoinsLastTradedUnique]) {
       try {
         const response = await fetcher({ count: 100 });
-        const edges = response?.data?.exploreList?.edges ?? [];
+        const edges = exploreEdges(response);
 
         for (const edge of edges) {
+          if (!edge.node) continue;
           const node = edge.node;
           if (node.coinType !== "TREND") continue;
 
@@ -218,8 +229,8 @@ export class TrendCoinIndexer {
 
           this.upsertFromApi(node);
         }
-      } catch (err: any) {
-        console.warn(`[trend-indexer] API fetch error:`, err?.message);
+      } catch (error) {
+        console.warn("[trend-indexer] API fetch error:", messageFromError(error));
       }
     }
 
@@ -246,7 +257,7 @@ export class TrendCoinIndexer {
       if (enriched > 0) await new Promise(r => setTimeout(r, 150));
       try {
         const response = await getCoin({ address, chain: 8453 });
-        const token = response?.data?.zora20Token;
+        const token = response.data?.zora20Token;
         if (!token) continue;
 
         this.db.prepare(`
@@ -285,8 +296,8 @@ export class TrendCoinIndexer {
         this.upsertMainCoinsTable(token);
 
         enriched++;
-      } catch (err: any) {
-        console.warn(`[trend-indexer] Enrich error for ${address}:`, err?.message);
+      } catch (error) {
+        console.warn(`[trend-indexer] Enrich error for ${address}:`, messageFromError(error));
       }
     }
 
@@ -302,7 +313,6 @@ export class TrendCoinIndexer {
    * Returns the number of alerts generated.
    */
   generateAlerts(): number {
-    const now = new Date().toISOString();
     let count = 0;
 
     // 1. Alert on newly discovered trend coins (no alert sent yet)
@@ -413,7 +423,7 @@ export class TrendCoinIndexer {
     const enriched = await this.enrichAll();
     const alerts = this.generateAlerts();
 
-    console.log(`[trend-indexer] tick: chain=${chainEvents} api=${apiDiscovered} enriched=${enriched} alerts=${alerts}`);
+    writeInfoLine(`[trend-indexer] tick: chain=${chainEvents} api=${apiDiscovered} enriched=${enriched} alerts=${alerts}`);
     return { chainEvents, apiDiscovered, enriched, alerts };
   }
 
@@ -457,7 +467,12 @@ export class TrendCoinIndexer {
         SUM(volume_24h) as totalVolume24h,
         SUM(market_cap) as totalMcap
       FROM trend_coins
-    `).get() as any;
+    `).get() as {
+      total: number | null;
+      hot: number | null;
+      totalVolume24h: number | null;
+      totalMcap: number | null;
+    } | undefined;
     return {
       total: row?.total ?? 0,
       hot: row?.hot ?? 0,
@@ -482,8 +497,10 @@ export class TrendCoinIndexer {
     `).run({ value: block.toString() });
   }
 
-  private upsertFromApi(node: any): void {
+  private upsertFromApi(node: CoinNode): void {
     const now = new Date().toISOString();
+    const creatorAddress = typeof node.creatorAddress === "string" ? node.creatorAddress.toLowerCase() : "0x0";
+    const poolCurrency = node.poolCurrencyToken?.address?.toLowerCase() ?? null;
     this.db.prepare(`
       INSERT INTO trend_coins (address, symbol, deployer, created_at, market_cap, volume_24h, unique_holders, pool_currency, indexed_at)
       VALUES (@address, @symbol, @deployer, @created_at, @market_cap, @volume_24h, @unique_holders, @pool_currency, @indexed_at)
@@ -496,12 +513,12 @@ export class TrendCoinIndexer {
     `).run({
       address: String(node.address).toLowerCase(),
       symbol: node.symbol ?? node.name ?? "unknown",
-      deployer: String(node.creatorAddress ?? "0x0").toLowerCase(),
+      deployer: creatorAddress,
       created_at: node.createdAt ?? now,
       market_cap: Number(node.marketCap ?? 0),
       volume_24h: Number(node.volume24h ?? 0),
       unique_holders: Number(node.uniqueHolders ?? 0),
-      pool_currency: node.poolCurrencyToken?.address?.toLowerCase() ?? null,
+      pool_currency: poolCurrency,
       indexed_at: now,
     });
 
@@ -519,8 +536,9 @@ export class TrendCoinIndexer {
     });
   }
 
-  private upsertMainCoinsTable(token: any): void {
+  private upsertMainCoinsTable(token: CoinNode): void {
     const now = new Date().toISOString();
+    const creatorAddress = typeof token.creatorAddress === "string" ? token.creatorAddress.toLowerCase() : null;
     this.db.prepare(`
       INSERT INTO coins (address, name, symbol, coin_type, creator_address, created_at, market_cap, volume_24h, total_volume, chain_id, raw_json, indexed_at)
       VALUES (@address, @name, @symbol, @coin_type, @creator_address, @created_at, @market_cap, @volume_24h, @total_volume, @chain_id, @raw_json, @indexed_at)
@@ -533,7 +551,7 @@ export class TrendCoinIndexer {
       name: token.name ?? null,
       symbol: token.symbol ?? null,
       coin_type: "TREND",
-      creator_address: token.creatorAddress?.toLowerCase?.() ?? null,
+      creator_address: creatorAddress,
       created_at: token.createdAt ?? null,
       market_cap: Number(token.marketCap ?? 0),
       volume_24h: Number(token.volume24h ?? 0),

@@ -103,7 +103,7 @@ export async function runPollingLoop(): Promise<void> {
 }
 
 export function recentCoins(limit = 20): LegacyQueryRow[] {
-  return getEngine().recentCoins(limit) as LegacyQueryRow[];
+  return getEngine().recentCoins(limit) as unknown as LegacyQueryRow[];
 }
 
 export function firstKnownCoin(): FirstKnownCoinRow | undefined {
@@ -119,11 +119,11 @@ export function firstKnownCoin(): FirstKnownCoinRow | undefined {
 }
 
 export function topVolumeCoins(limit = 20): LegacyQueryRow[] {
-  return getEngine().topVolumeCoins(limit) as LegacyQueryRow[];
+  return getEngine().topVolumeCoins(limit) as unknown as LegacyQueryRow[];
 }
 
 export function topAnalytics(limit = 20): LegacyQueryRow[] {
-  return getEngine().topAnalytics(limit) as LegacyQueryRow[];
+  return getEngine().topAnalytics(limit) as unknown as LegacyQueryRow[];
 }
 
 export function watchlistAddCoin(
@@ -140,15 +140,15 @@ export function watchlistRemoveCoin(coinAddress: string, listName = "default"): 
 }
 
 export function watchlistList(listName = "default"): LegacyQueryRow[] {
-  return getEngine().watchlistList(listName) as LegacyQueryRow[];
+  return getEngine().watchlistList(listName) as unknown as LegacyQueryRow[];
 }
 
 export function watchlistRecentMoves(listName = "default", limit = 25): LegacyQueryRow[] {
-  return getEngine().watchlistMoves(listName, limit) as LegacyQueryRow[];
+  return getEngine().watchlistMoves(listName, limit) as unknown as LegacyQueryRow[];
 }
 
 export function latestAlerts(limit = 20): LegacyQueryRow[] {
-  return getEngine().latestAlerts(limit) as LegacyQueryRow[];
+  return getEngine().latestAlerts(limit) as unknown as LegacyQueryRow[];
 }
 
 export async function dispatchPendingAlerts(limit = 12): Promise<string | null> {
