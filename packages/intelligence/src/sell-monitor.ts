@@ -17,6 +17,7 @@ import {
   formatEther,
   erc20Abi,
   type Address,
+  type Hex,
 } from "viem";
 
 // Coins that must NEVER be auto-sold
@@ -103,6 +104,87 @@ export interface MonitorReport {
   announcements: string[];
 }
 
+interface RouteHopPoolParams {
+  fee: number;
+  tickSpacing: number;
+  hooks: Address;
+  hookData?: Hex;
+}
+
+interface SellRoute {
+  sellPath: Address[];
+  sellPoolParams: RouteHopPoolParams[];
+}
+
+interface CoinRouteModule {
+  resolveCoinRoute(params: {
+    client: RouteDiscoveryClient;
+    coinAddress: Address;
+    maxDepth?: number;
+  }): Promise<SellRoute>;
+}
+
+interface RouteDiscoveryClient {
+  call(args: { to: Address; data: Hex }): Promise<{ data?: Hex | undefined }>;
+  readContract(args: {
+    address: Address;
+    abi: readonly Record<string, unknown>[];
+    functionName: string;
+    args?: readonly unknown[];
+  }): Promise<unknown>;
+  getStorageAt(args: { address: Address; slot: Hex }): Promise<Hex | undefined>;
+}
+
+interface QuoterResult {
+  amountOut: bigint;
+}
+
+interface QuoterModule {
+  quoteExactInput(params: {
+    chainId: number;
+    client: RouteDiscoveryClient;
+    path: Address[];
+    poolParams: RouteHopPoolParams[];
+    amountIn: bigint;
+    exactInput: boolean;
+  }): Promise<QuoterResult>;
+  quoteExactInputSingle(params: {
+    chainId: number;
+    client: RouteDiscoveryClient;
+    poolKey: {
+      currency0: Address;
+      currency1: Address;
+      fee: number;
+      tickSpacing: number;
+      hooks: Address;
+    };
+    zeroForOne: boolean;
+    amountIn: bigint;
+    hookData?: Hex;
+  }): Promise<QuoterResult>;
+}
+
+interface SwapFromSmartAccountResult {
+  userOpHash: `0x${string}`;
+  txHash: `0x${string}` | null;
+  status: string;
+  amountOut?: string;
+}
+
+interface CdpModule {
+  swapFromSmartAccount(input: {
+    smartAccountName: string;
+    fromToken: `0x${string}`;
+    toToken: `0x${string}`;
+    fromAmount: bigint;
+    slippageBps: number;
+  }): Promise<SwapFromSmartAccountResult>;
+}
+
+function messageFromError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 // ---------------------------------------------------------------------------
 // Quoter — estimate sell value via eth_call
 // ---------------------------------------------------------------------------
@@ -117,15 +199,15 @@ export async function estimateSellValue(
     // Lazy import server swap infrastructure
     const coinRouteMod = await import(
       new URL("../../server/src/services/coinRoute.js", import.meta.url).pathname
-    );
+    ) as unknown as CoinRouteModule;
     const quoterMod = await import(
       new URL("../../server/src/services/v4Quoter.js", import.meta.url).pathname
-    );
+    ) as unknown as QuoterModule;
 
     const client = createPublicClient({
       chain: base,
       transport: http(process.env.BASE_RPC_URL),
-    });
+    }) as unknown as RouteDiscoveryClient;
 
     // Resolve route
     const route = await coinRouteMod.resolveCoinRoute({
@@ -143,14 +225,14 @@ export async function estimateSellValue(
         amountIn: tokenAmount,
         exactInput: true,
       });
-      return quote.amountOut as bigint;
+      return quote.amountOut;
     } catch {
       // Sequential single-hop quoting for Doppler-hooked pools
       let currentAmount = tokenAmount;
       for (let i = 0; i < route.sellPoolParams.length; i++) {
-        const hop = route.sellPoolParams[i]!;
-        const tokenIn = route.sellPath[i]!;
-        const tokenOut = route.sellPath[i + 1]!;
+        const hop = route.sellPoolParams[i];
+        const tokenIn = route.sellPath[i];
+        const tokenOut = route.sellPath[i + 1];
         const inNorm = tokenIn.toLowerCase();
         const outNorm = tokenOut.toLowerCase();
         const zeroForOne = inNorm < outNorm;
@@ -176,7 +258,7 @@ export async function estimateSellValue(
       return currentAmount;
     }
   } catch (err) {
-    console.error(`[sell-monitor] Quote failed for ${coinAddress}:`, (err as Error).message?.slice(0, 100));
+    console.error(`[sell-monitor] Quote failed for ${coinAddress}:`, messageFromError(err).slice(0, 100));
     return null;
   }
 }
@@ -379,9 +461,9 @@ async function executeSell(
 
   try {
     const serverPath = new URL("../../server/src/services/cdp.js", import.meta.url).pathname;
-    const { swapFromSmartAccount } = await import(serverPath);
+    const cdpMod = await import(serverPath) as unknown as CdpModule;
 
-    const result = await swapFromSmartAccount({
+    const result = await cdpMod.swapFromSmartAccount({
       smartAccountName: "klawley",
       fromToken: coinAddress,
       toToken: WETH,
@@ -413,7 +495,7 @@ async function executeSell(
           console.log(`  [reconcile] Force-closed position after sell (on-chain balance = 0)`);
         }
       } catch (err) {
-        console.warn(`  [reconcile] Failed to check post-sell balance: ${err instanceof Error ? err.message : err}`);
+        console.warn(`  [reconcile] Failed to check post-sell balance: ${messageFromError(err)}`);
       }
 
       return {
