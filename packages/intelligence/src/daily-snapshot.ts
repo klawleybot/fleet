@@ -68,6 +68,61 @@ export interface DailySnapshot {
   }[];
 }
 
+type SnapshotJsonRow = {
+  snapshot_json: string;
+};
+
+type ActivityRow = {
+  swaps: number | null;
+  coins: number | null;
+};
+
+type VibeRow = {
+  buys: number | null;
+  sells: number | null;
+};
+
+type TopCoinSummaryRow = {
+  symbol: string | null;
+  name: string | null;
+  address: string;
+  market_cap: number | null;
+  swaps: number | null;
+  buys: number | null;
+  sells: number | null;
+  acceleration: number | null;
+};
+
+type TraderSummaryRow = {
+  sender_address: string;
+  handle: string | null;
+  swaps: number | null;
+  buys: number | null;
+  sells: number | null;
+};
+
+type TraderTopCoinRow = {
+  symbol: string | null;
+};
+
+type FreshLaunchRow = {
+  symbol: string | null;
+  name: string | null;
+  swaps: number | null;
+  buys: number | null;
+  sells: number | null;
+};
+
+function parseDailySnapshotJson(snapshotJson: string): DailySnapshot {
+  const parsed = JSON.parse(snapshotJson) as unknown;
+  return parsed as DailySnapshot;
+}
+
+function parseWeeklySnapshotJson(snapshotJson: string): WeeklySnapshot {
+  const parsed = JSON.parse(snapshotJson) as unknown;
+  return parsed as WeeklySnapshot;
+}
+
 /**
  * Ensure the daily_snapshots table exists.
  */
@@ -132,7 +187,7 @@ export function compactWeeklySnapshots(dbPath?: string): number {
   for (const row of dailyRows) {
     const monday = getMonday(row.date);
     if (!weekMap.has(monday)) weekMap.set(monday, []);
-    weekMap.get(monday)!.push(JSON.parse(row.snapshot_json));
+    weekMap.get(monday)!.push(parseDailySnapshotJson(row.snapshot_json));
   }
 
   // Check which weekly rollups already exist
@@ -237,10 +292,10 @@ export function loadWeeklySnapshots(weeks: number = 12, dbPath?: string): Weekly
     SELECT snapshot_json FROM weekly_snapshots
     ORDER BY week_start DESC
     LIMIT ?
-  `).all(weeks) as Array<{ snapshot_json: string }>;
+  `).all(weeks) as SnapshotJsonRow[];
 
   db.close();
-  return rows.map(r => JSON.parse(r.snapshot_json));
+  return rows.map((row) => parseWeeklySnapshotJson(row.snapshot_json));
 }
 
 /**
@@ -259,7 +314,7 @@ export function saveDailySnapshot(dbPath?: string): DailySnapshot {
     SELECT count(*) as swaps, count(distinct coin_address) as coins
     FROM coin_swaps
     WHERE block_timestamp >= ? AND block_timestamp <= ?
-  `).get(todayStart, todayEnd) as any;
+  `).get(todayStart, todayEnd) as ActivityRow | undefined;
 
   // Overall vibe (buy ratio for the day)
   const vibeData = db.prepare(`
@@ -268,13 +323,15 @@ export function saveDailySnapshot(dbPath?: string): DailySnapshot {
       sum(case when activity_type='SELL' then 1 else 0 end) as sells
     FROM coin_swaps
     WHERE block_timestamp >= ? AND block_timestamp <= ?
-  `).get(todayStart, todayEnd) as any;
+  `).get(todayStart, todayEnd) as VibeRow | undefined;
 
-  const buyRatio = vibeData.buys / Math.max(vibeData.buys + vibeData.sells, 1);
+  const buys = Number(vibeData?.buys ?? 0);
+  const sells = Number(vibeData?.sells ?? 0);
+  const buyRatio = buys / Math.max(buys + sells, 1);
   let vibe = "crab";
   if (buyRatio > 0.6) vibe = "bullish";
   else if (buyRatio < 0.4) vibe = "bearish";
-  else if (activity.swaps > 500) vibe = "chaos";
+  else if (Number(activity?.swaps ?? 0) > 500) vibe = "chaos";
 
   // Top coins — use pre-aggregated coin_analytics (fast, no full scan)
   const topCoinsRows = db.prepare(`
@@ -288,22 +345,24 @@ export function saveDailySnapshot(dbPath?: string): DailySnapshot {
     WHERE ca.swap_count_24h >= 5
     ORDER BY ca.swap_count_24h DESC
     LIMIT 10
-  `).all() as any[];
+  `).all() as TopCoinSummaryRow[];
 
-  const topCoins = topCoinsRows.map(r => {
-    const total = r.buys + r.sells;
-    const br = r.buys / Math.max(total, 1);
+  const topCoins = topCoinsRows.map((row): DailySnapshot["topCoins"][number] => {
+    const buysCount = Number(row.buys ?? 0);
+    const sellsCount = Number(row.sells ?? 0);
+    const total = buysCount + sellsCount;
+    const br = buysCount / Math.max(total, 1);
     let trend = "steady";
-    if ((r.acceleration ?? 0) >= 2 || br > 0.7) trend = "accelerating";
-    else if ((r.acceleration ?? 0) <= -1 || br < 0.35) trend = "decelerating";
+    if (Number(row.acceleration ?? 0) >= 2 || br > 0.7) trend = "accelerating";
+    else if (Number(row.acceleration ?? 0) <= -1 || br < 0.35) trend = "decelerating";
     return {
-      symbol: r.symbol,
-      name: r.name,
-      address: r.address,
-      swaps: r.swaps,
+      symbol: row.symbol ?? "???",
+      name: row.name ?? "unknown",
+      address: row.address,
+      swaps: Number(row.swaps ?? 0),
       buyRatio: Math.round(br * 100) / 100,
       trend,
-      marketCap: r.market_cap || 0,
+      marketCap: Number(row.market_cap ?? 0),
     };
   });
 
@@ -321,7 +380,7 @@ export function saveDailySnapshot(dbPath?: string): DailySnapshot {
     HAVING swaps >= 5
     ORDER BY swaps DESC
     LIMIT 10
-  `).all(todayStart, todayEnd) as any[];
+  `).all(todayStart, todayEnd) as TraderSummaryRow[];
 
   // Get top coin per trader
   const topCoinStmt = db.prepare(`
@@ -334,21 +393,23 @@ export function saveDailySnapshot(dbPath?: string): DailySnapshot {
     LIMIT 1
   `);
 
-  const topTraders = topTradersRows.map(r => {
+  const topTraders = topTradersRows.map((row): DailySnapshot["topTraders"][number] => {
     let style = "flipper";
-    if (r.sells === 0) style = "ape";
-    else if (r.buys === 0) style = "exit-only";
-    else if (r.buys > r.sells * 3) style = "hodler";
+    const buyCount = Number(row.buys ?? 0);
+    const sellCount = Number(row.sells ?? 0);
+    if (sellCount === 0) style = "ape";
+    else if (buyCount === 0) style = "exit-only";
+    else if (buyCount > sellCount * 3) style = "hodler";
 
-    const topCoinRow = topCoinStmt.get(r.sender_address, todayStart, todayEnd) as any;
-    const handle = r.handle && !r.handle.startsWith("0x")
-      ? r.handle
-      : r.sender_address.slice(0, 6) + "..." + r.sender_address.slice(-4);
+    const topCoinRow = topCoinStmt.get(row.sender_address, todayStart, todayEnd) as TraderTopCoinRow | undefined;
+    const handle = row.handle && !row.handle.startsWith("0x")
+      ? row.handle
+      : row.sender_address.slice(0, 6) + "..." + row.sender_address.slice(-4);
 
     return {
       handle,
-      address: r.sender_address,
-      swaps: r.swaps,
+      address: row.sender_address,
+      swaps: Number(row.swaps ?? 0),
       style,
       topCoin: topCoinRow?.symbol || "???",
     };
@@ -368,19 +429,23 @@ export function saveDailySnapshot(dbPath?: string): DailySnapshot {
     HAVING swaps > 3
     ORDER BY swaps DESC
     LIMIT 10
-  `).all(todayStart, todayEnd, todayStart, todayEnd) as any[];
+  `).all(todayStart, todayEnd, todayStart, todayEnd) as FreshLaunchRow[];
 
-  const freshLaunches = freshRows.map(f => {
-    const ratio = f.buys / Math.max(f.sells, 1);
-    let verdict = "too-early";
-    if (ratio > 2) verdict = "pumping";
-    else if (ratio < 0.5) verdict = "dumping";
-    else verdict = "flatline";
-    return { symbol: f.symbol, name: f.name, swaps: f.swaps, verdict };
+  const freshLaunches = freshRows.map((row): DailySnapshot["freshLaunches"][number] => {
+    const buysCount = Number(row.buys ?? 0);
+    const sellsCount = Number(row.sells ?? 0);
+    const ratio = buysCount / Math.max(sellsCount, 1);
+    const verdict = ratio > 2 ? "pumping" : ratio < 0.5 ? "dumping" : "flatline";
+    return {
+      symbol: row.symbol ?? "???",
+      name: row.name ?? "unknown",
+      swaps: Number(row.swaps ?? 0),
+      verdict,
+    };
   });
 
   // Detect themes from coin names
-  const allNames = topCoinsRows.map(r => `${r.symbol} ${r.name}`.toLowerCase());
+  const allNames = topCoinsRows.map((row) => `${row.symbol ?? ""} ${row.name ?? ""}`.toLowerCase());
   const themes: string[] = [];
   const themePatterns: [RegExp, string][] = [
     [/oil|petro|crude|opec|reserve/i, "oil/reserves"],
@@ -398,8 +463,8 @@ export function saveDailySnapshot(dbPath?: string): DailySnapshot {
   const snapshot: DailySnapshot = {
     date: today,
     overallVibe: vibe,
-    totalSwaps: activity.swaps,
-    totalActiveCoins: activity.coins,
+    totalSwaps: Number(activity?.swaps ?? 0),
+    totalActiveCoins: Number(activity?.coins ?? 0),
     topThemes: themes,
     topCoins,
     topTraders,
@@ -436,10 +501,10 @@ export function loadRecentSnapshots(days: number = 7, dbPath?: string): DailySna
     SELECT snapshot_json FROM daily_snapshots
     WHERE date >= ?
     ORDER BY date DESC
-  `).all(cutoff) as any[];
+  `).all(cutoff) as SnapshotJsonRow[];
 
   db.close();
-  return rows.map(r => JSON.parse(r.snapshot_json));
+  return rows.map((row) => parseDailySnapshotJson(row.snapshot_json));
 }
 
 /**
