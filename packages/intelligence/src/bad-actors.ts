@@ -1,7 +1,11 @@
 import type Database from "better-sqlite3";
-import * as zoraSdk from "@zoralabs/coins-sdk";
-
-const getCoinHolders = (zoraSdk as any).getCoinHolders as (args: any) => Promise<any>;
+import {
+  coinHolderEdges,
+  coinHolderPageInfo,
+  getCoinHolders,
+  type ExploreEdge,
+  type HolderBalanceNode,
+} from "./zora-sdk.js";
 
 export interface BadActor {
   address: string;
@@ -20,6 +24,37 @@ export interface BadActorHolding {
   holdingPct: number;
   estimatedSlippagePct: number;
   estimatedValueUsd: number;
+}
+
+type CoinMetadataRow = {
+  market_cap: number | null;
+  volume_24h: number | null;
+  symbol: string | null;
+  name: string | null;
+};
+
+type FshRow = {
+  address: string;
+  coin_address: string;
+  coin_symbol: string | null;
+  sell_amount_usdc: number | null;
+  coin_market_cap: number | null;
+  liquidity_pct: number | null;
+  handle: string | null;
+  block_timestamp: string | null;
+};
+
+type CachedHoldingRow = {
+  actorAddress: string;
+  label: string | null;
+  severity: string;
+  holdingPct: number;
+  estimatedSlippagePct: number;
+  estimatedValueUsd: number;
+};
+
+function messageFromError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export function addBadActor(db: Database.Database, address: string, label?: string, reason?: string, severity?: string): void {
@@ -63,7 +98,7 @@ export async function getBadActorHoldings(
   const holdings: BadActorHolding[] = [];
   let after: string | undefined;
   let totalSupply = 0n;
-  const allEdges: any[] = [];
+  const allEdges: Array<ExploreEdge<HolderBalanceNode>> = [];
 
   for (let page = 0; page < 4; page++) {
     try {
@@ -73,13 +108,14 @@ export async function getBadActorHoldings(
         count: 50,
         ...(after ? { after } : {}),
       });
-      const token = res?.data?.zora20Token;
-      if (!token?.tokenBalances?.edges?.length) break;
-      allEdges.push(...token.tokenBalances.edges);
-      after = token.tokenBalances.pageInfo?.endCursor;
-      if (!token.tokenBalances.pageInfo?.hasNextPage) break;
+      const edges = coinHolderEdges(res);
+      if (!edges.length) break;
+      allEdges.push(...edges);
+      const pageInfo = coinHolderPageInfo(res);
+      after = pageInfo?.endCursor ?? undefined;
+      if (!pageInfo?.hasNextPage) break;
     } catch (err) {
-      console.warn(`[bad-actors] getCoinHolders failed for ${coinAddress}:`, err);
+      console.warn(`[bad-actors] getCoinHolders failed for ${coinAddress}:`, messageFromError(err));
       break;
     }
   }
@@ -89,7 +125,7 @@ export async function getBadActorHoldings(
     totalSupply += bal;
   }
 
-  const coinRow = db.prepare(`SELECT market_cap, volume_24h, symbol, name FROM coins WHERE address = ?`).get(coinAddress.toLowerCase()) as any;
+  const coinRow = db.prepare(`SELECT market_cap, volume_24h, symbol, name FROM coins WHERE address = ?`).get(coinAddress.toLowerCase()) as CoinMetadataRow | undefined;
   const marketCapUsd = Number(coinRow?.market_cap ?? 0);
 
   for (const edge of allEdges) {
@@ -151,17 +187,17 @@ export function detectFSH(db: Database.Database, lookbackHours: number = 24, min
       AND (s.amount_usdc / c.market_cap * 100.0) >= ?
     ORDER BY liquidity_pct DESC
     LIMIT 20
-  `).all(`-${lookbackHours} hours`, minMarketCapUsd, minLiquidityPct) as any[];
+  `).all(`-${lookbackHours} hours`, minMarketCapUsd, minLiquidityPct) as FshRow[];
 
-  return rows.map(r => ({
-    address: r.address,
-    coinAddress: r.coin_address,
-    coinSymbol: r.coin_symbol,
-    sellAmountUsdc: Number(r.sell_amount_usdc),
-    coinMarketCapUsd: Number(r.coin_market_cap),
-    liquidityPct: Number(r.liquidity_pct),
-    handle: r.handle ?? null,
-    txTimestamp: r.block_timestamp ?? null,
+  return rows.map((row) => ({
+    address: row.address,
+    coinAddress: row.coin_address,
+    coinSymbol: row.coin_symbol,
+    sellAmountUsdc: Number(row.sell_amount_usdc ?? 0),
+    coinMarketCapUsd: Number(row.coin_market_cap ?? 0),
+    liquidityPct: Number(row.liquidity_pct ?? 0),
+    handle: row.handle ?? null,
+    txTimestamp: row.block_timestamp ?? null,
   }));
 }
 
@@ -195,7 +231,7 @@ export function getCachedBadActorHoldings(db: Database.Database, coinAddress: st
     WHERE c.coin_address = ? AND c.holding_pct > 0.1
       AND datetime(c.checked_at) >= datetime('now', '-2 hours')
     ORDER BY c.holding_pct DESC
-  `).all(coinAddress.toLowerCase()) as any[];
+  `).all(coinAddress.toLowerCase()) as CachedHoldingRow[];
 }
 
 export function formatBadActorWarning(holdings: Array<{ label: string | null; actorAddress?: string; severity: string; holdingPct: number; estimatedSlippagePct: number; estimatedValueUsd: number }>): string {
