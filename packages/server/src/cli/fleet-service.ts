@@ -23,6 +23,38 @@ const FLEET_ROOT = resolve(__dirname, "../../../..");
 const PM2_NAME = "fleet-server";
 const SERVER_PORT = process.env.PORT ?? "4020";
 
+interface Pm2ProcessInfo {
+  name?: string;
+  pm2_env?: {
+    status?: string;
+    pm_uptime?: number;
+    restart_time?: number;
+  };
+  monit?: {
+    memory?: number;
+    cpu?: number;
+  };
+}
+
+interface HealthResponse {
+  uptime?: string | number;
+  masterBalance?: string | number;
+  [key: string]: unknown;
+}
+
+function parsePm2List(output: string): Pm2ProcessInfo[] {
+  try {
+    const parsed = JSON.parse(output) as unknown;
+    return Array.isArray(parsed) ? (parsed as Pm2ProcessInfo[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseHealthResponse(data: unknown): HealthResponse | undefined {
+  return typeof data === "object" && data !== null ? (data as HealthResponse) : undefined;
+}
+
 function run(cmd: string, opts?: { silent?: boolean }): string {
   try {
     return execSync(cmd, {
@@ -30,9 +62,16 @@ function run(cmd: string, opts?: { silent?: boolean }): string {
       encoding: "utf-8",
       stdio: opts?.silent ? "pipe" : "inherit",
     });
-  } catch (err: any) {
-    if (opts?.silent) return err.stdout ?? "";
-    throw err;
+  } catch (error) {
+    if (opts?.silent) {
+      const stdout = typeof error === "object" && error !== null && "stdout" in error
+        ? (error as { stdout?: unknown }).stdout
+        : undefined;
+      if (typeof stdout === "string") return stdout;
+      if (Buffer.isBuffer(stdout)) return stdout.toString("utf8");
+      return "";
+    }
+    throw error;
   }
 }
 
@@ -42,30 +81,20 @@ function runSilent(cmd: string): string {
 
 function isRunning(): boolean {
   const out = runSilent(`pm2 jlist 2>/dev/null`);
-  try {
-    const list = JSON.parse(out);
-    return list.some((p: any) => p.name === PM2_NAME && p.pm2_env?.status === "online");
-  } catch {
-    return false;
-  }
+  return parsePm2List(out).some((processInfo) => processInfo.name === PM2_NAME && processInfo.pm2_env?.status === "online");
 }
 
-function getProcessInfo(): any | null {
+function getProcessInfo(): Pm2ProcessInfo | null {
   const out = runSilent(`pm2 jlist 2>/dev/null`);
-  try {
-    const list = JSON.parse(out);
-    return list.find((p: any) => p.name === PM2_NAME) ?? null;
-  } catch {
-    return null;
-  }
+  return parsePm2List(out).find((processInfo) => processInfo.name === PM2_NAME) ?? null;
 }
 
-async function healthCheck(): Promise<{ ok: boolean; data?: any; error?: string }> {
+async function healthCheck(): Promise<{ ok: boolean; data?: HealthResponse; error?: string }> {
   try {
     const res = await fetch(`http://127.0.0.1:${SERVER_PORT}/health`, {
       signal: AbortSignal.timeout(5000),
     });
-    const data = await res.json();
+    const data = parseHealthResponse(await res.json());
     return { ok: res.ok, data };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -117,10 +146,10 @@ function cmdStop() {
   console.log(`✅ ${PM2_NAME} stopped.`);
 }
 
-function cmdRestart() {
+async function cmdRestart() {
   if (!isRunning()) {
     console.log(`${PM2_NAME} is not running. Starting...`);
-    cmdStart();
+    await cmdStart();
     return;
   }
   run(`pm2 restart ${PM2_NAME}`);
