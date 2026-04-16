@@ -8,10 +8,10 @@
  * Uses viem getLogs for ERC-20 Transfer events and eth_getBlockByNumber for native ETH.
  */
 
-import { createPublicClient, http, parseAbiItem, formatEther, formatUnits, type Address } from "viem";
+import { createPublicClient, http, parseAbiItem, formatEther, formatUnits, type Address, type Hex } from "viem";
 import { base } from "viem/chains";
 import type Database from "better-sqlite3";
-import { addBadActor, listBadActors, type BadActor } from "./bad-actors.js";
+import { addBadActor, listBadActors } from "./bad-actors.js";
 
 // Token addresses on Base mainnet
 const WETH = "0x4200000000000000000000000000000000000006" as Address;
@@ -63,9 +63,61 @@ interface TrackerState {
   lastScannedBlock: bigint;
 }
 
+interface TrackerClient {
+  getBlockNumber(): Promise<bigint>;
+  getLogs(args: {
+    address: Address;
+    event: typeof TRANSFER_EVENT;
+    args: { from: Address[] };
+    fromBlock: bigint;
+    toBlock: bigint;
+  }): Promise<TransferLog[]>;
+}
+
+type PriceRow = {
+  price: number | null;
+};
+
+type TransferLog = {
+  args?: {
+    from?: Address;
+    to?: Address;
+    value?: bigint;
+  };
+  transactionHash?: Hex | null;
+  blockNumber?: bigint | null;
+};
+
+type RecentTransferRow = {
+  fromAddress: string;
+  toAddress: string;
+  tokenSymbol: string;
+  amountFormatted: string;
+  estimatedUsd: number;
+  txHash: string;
+  rootActor: string | null;
+  autoAdded: number;
+  createdAt: string;
+};
+
+type ClusterSummaryRow = {
+  address: string;
+  label: string | null;
+  depth: number;
+  reason: string | null;
+};
+
+function messageFromError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function writeInfoLine(message: string): void {
+  process.stdout.write(`${message}\n`);
+}
+
 export class BadActorTracker {
   private readonly db: Database.Database;
-  private readonly client: any; // viem PublicClient — typed as any to avoid cross-package type conflicts
+  private readonly client: TrackerClient;
   private readonly minTransferUsd: number;
   private readonly lookbackBlocks: bigint;
   private readonly maxDepth: number;
@@ -157,8 +209,11 @@ export class BadActorTracker {
         WHERE datetime(block_timestamp) >= datetime('now', '-1 hour')
           AND amount_usdc > 10 AND coin_amount > 0
         LIMIT 100
-      `).get() as any;
-      // This isn't perfect but gives ballpark
+      `).get() as PriceRow | undefined;
+      const ethUsd = Number(ethRow?.price ?? 0);
+      if (Number.isFinite(ethUsd) && ethUsd > 100) {
+        return { ...defaults, ethUsd };
+      }
     } catch { /* use defaults */ }
 
     return defaults;
@@ -265,13 +320,14 @@ export class BadActorTracker {
           args: { from: actorAddresses },
           fromBlock,
           toBlock: currentBlock,
-        });
+        }) as TransferLog[];
 
         for (const log of logs) {
-          const from = (log.args.from as string).toLowerCase();
-          const to = (log.args.to as string).toLowerCase();
-          const value = log.args.value as bigint;
+          const from = log.args?.from?.toLowerCase();
+          const to = log.args?.to?.toLowerCase();
+          const value = log.args?.value;
 
+          if (!from || !to || value === undefined) continue;
           if (!actorSet.has(from)) continue;
           if (to === "0x0000000000000000000000000000000000000000") continue; // burn
 
@@ -294,8 +350,8 @@ export class BadActorTracker {
             rootActor: rootLabel,
           });
         }
-      } catch (err: any) {
-        console.warn(`[bad-actor-tracker] getLogs failed for ${symbol}:`, err?.message);
+      } catch (error) {
+        console.warn(`[bad-actor-tracker] getLogs failed for ${symbol}:`, messageFromError(error));
       }
     }
 
@@ -337,7 +393,7 @@ export class BadActorTracker {
 
         actorSet.add(d.toAddress); // prevent duplicate adds in same tick
         autoAdded++;
-        console.log(`[bad-actor-tracker] Auto-added ${d.toAddress} as ${clusterLabel} (received $${d.estimatedUsd.toFixed(0)} ${d.tokenSymbol} from ${d.fromAddress.slice(0, 10)})`);
+        writeInfoLine(`[bad-actor-tracker] Auto-added ${d.toAddress} as ${clusterLabel} (received $${d.estimatedUsd.toFixed(0)} ${d.tokenSymbol} from ${d.fromAddress.slice(0, 10)})`);
       }
     }
 
@@ -347,7 +403,7 @@ export class BadActorTracker {
 
     const blockCount = Number(currentBlock - fromBlock);
     if (detections.length > 0 || autoAdded > 0) {
-      console.log(`[bad-actor-tracker] scanned ${blockCount} blocks: ${detections.length} transfers, ${autoAdded} auto-added`);
+      writeInfoLine(`[bad-actor-tracker] scanned ${blockCount} blocks: ${detections.length} transfers, ${autoAdded} auto-added`);
     }
 
     return {
@@ -377,7 +433,10 @@ export class BadActorTracker {
              amount_formatted AS amountFormatted, estimated_usd AS estimatedUsd, tx_hash AS txHash,
              root_actor AS rootActor, auto_added AS autoAdded, created_at AS createdAt
       FROM bad_actor_transfers ORDER BY id DESC LIMIT ?
-    `).all(limit) as any[];
+    `).all(limit).map((row) => ({
+      ...(row as RecentTransferRow),
+      autoAdded: Boolean((row as RecentTransferRow).autoAdded),
+    }));
   }
 
   /**
@@ -395,6 +454,6 @@ export class BadActorTracker {
       FROM bad_actors
       WHERE root_actor = ? OR address = ?
       ORDER BY depth ASC, added_at ASC
-    `).all(addr, addr) as any[];
+    `).all(addr, addr) as ClusterSummaryRow[];
   }
 }
