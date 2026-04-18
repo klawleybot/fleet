@@ -210,7 +210,7 @@ export function forceClosePosition(coinAddress: string, reason?: string): Positi
     "UPDATE klawley_positions SET token_balance = '0', status = 'closed', closed_at = ? WHERE id = ?"
   ).run(new Date().toISOString(), pos.id);
 
-  console.log(`[positions] Force-closed ${pos.symbol || addr}: ${reason || "on-chain balance is 0"}`);
+  console.warn(`[positions] Force-closed ${pos.symbol || addr}: ${reason || "on-chain balance is 0"}`);
 
   return db.prepare("SELECT * FROM klawley_positions WHERE id = ?").get(pos.id) as Position;
 }

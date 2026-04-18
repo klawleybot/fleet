@@ -3,7 +3,10 @@ import { BaseEth } from "@irys/upload-ethereum";
 import fs from "node:fs";
 
 async function main() {
-  let pk = process.env.ZORA_PRIVATE_KEY?.trim()!;
+  const pkRaw = process.env.ZORA_PRIVATE_KEY?.trim();
+  if (!pkRaw) throw new Error("ZORA_PRIVATE_KEY is required");
+
+  let pk = pkRaw;
   if (!pk.startsWith("0x")) pk = `0x${pk}`;
 
   const uploader = await Uploader(BaseEth).withWallet(pk);
@@ -13,7 +16,12 @@ async function main() {
   // Fund Irys with 0.001 ETH
   console.log("Funding 0.001 ETH to Irys...");
   const fundResult = await uploader.fund(1_000_000_000_000_000n);
-  console.log("Fund result:", JSON.stringify(fundResult, (_, v) => typeof v === "bigint" ? v.toString() : v));
+  console.log(
+    "Fund result:",
+    JSON.stringify(fundResult, (_key, value: unknown): unknown => (
+      typeof value === "bigint" ? value.toString() : value
+    )),
+  );
   console.log("Balance after:", (await uploader.getBalance()).toString());
 
   // Test upload — grab any existing chart PNG
@@ -35,4 +43,7 @@ async function main() {
   }
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

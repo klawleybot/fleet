@@ -9,6 +9,7 @@ import { base } from "viem/chains";
 import { runScout, formatScoutReport } from "./scout.js";
 import { evaluateScoutReport, formatExecutorReport, DEFAULT_POLICY, type TradeDecision } from "./scout-executor.js";
 import { IntelligenceEngine } from "./engine.js";
+import type { swapFromSmartAccount as swapFromSmartAccountFn } from "../../server/src/services/cdp.js";
 import {
   recordBuy,
   getOpenPositions,
@@ -23,7 +24,6 @@ import {
 
 const KLAWLEY_SA: Address = "0x097677d3e2cde65af10be80ae5e67b8b68eb613d";
 const WETH: Address = "0x4200000000000000000000000000000000000006";
-const USDC: Address = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
 // Fallback ETH price if on-chain oracle fails
 const ETH_PRICE_FALLBACK = 2000;
@@ -92,7 +92,7 @@ export async function fetchEthPrice(): Promise<number> {
       functionName: "slot0",
     });
 
-    const sqrtPriceX96 = result[0] as bigint;
+    const [sqrtPriceX96] = result;
 
     // Pool is WETH (token0) / USDC (token1) — WETH has 18 decimals, USDC has 6
     // sqrtPriceX96 = sqrt(USDC_raw / WETH_raw) * 2^96
@@ -143,20 +143,16 @@ function usdToWei(usd: number): bigint {
 // Swap function (lazy import from server package)
 // ---------------------------------------------------------------------------
 
-let _swapFn: ((input: {
-  smartAccountName: string;
-  fromToken: `0x${string}`;
-  toToken: `0x${string}`;
-  fromAmount: bigint;
-  slippageBps: number;
-}) => Promise<{ userOpHash: `0x${string}`; txHash: `0x${string}` | null; status: string; amountOut?: string }>) | null = null;
+type SwapFromSmartAccount = typeof swapFromSmartAccountFn;
+
+let _swapFn: SwapFromSmartAccount | null = null;
 
 async function getSwapFn() {
   if (_swapFn) return _swapFn;
   const serverPath = new URL("../../server/src/services/cdp.js", import.meta.url).pathname;
-  const mod = await import(serverPath);
+  const mod = (await import(serverPath)) as { swapFromSmartAccount: SwapFromSmartAccount };
   _swapFn = mod.swapFromSmartAccount;
-  return _swapFn!;
+  return _swapFn;
 }
 
 // ---------------------------------------------------------------------------
@@ -173,7 +169,6 @@ export async function runLive(opts: { dryRun?: boolean } = {}): Promise<LiveRepo
   const ethPriceUsd = await fetchEthPrice();
   const capitalUsd = Number(formatEther(ethBalance)) * ethPriceUsd;
   const currentPositions = getPositionCount();
-  const openPositions = getOpenPositions();
 
   console.log(`[scout-live] Capital: ${formatEther(ethBalance)} ETH (~$${capitalUsd.toFixed(0)}) | Positions: ${currentPositions}`);
 
@@ -299,7 +294,6 @@ export async function runLive(opts: { dryRun?: boolean } = {}): Promise<LiveRepo
 // ---------------------------------------------------------------------------
 
 function formatBuyAnnouncement(decision: TradeDecision, ethWei: string, txHash: string | null): string {
-  const ethStr = Number(formatEther(BigInt(ethWei))).toFixed(6);
   const usdStr = decision.proposedSizeUsd.toFixed(2);
   const sym = decision.symbol || "???";
   const name = decision.name || "";

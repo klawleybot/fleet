@@ -18,21 +18,17 @@ import {
   erc20Abi,
   type Address,
 } from "viem";
-import type { Client, Transport, Chain } from "viem";
 import { base } from "viem/chains";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { writeFileSync, mkdirSync } from "fs";
+import { estimateSellValue } from "./sell-monitor.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DB = resolve(__dirname, "../.data/zora-intelligence.db");
 const CHART_OUTPUT_DIR = resolve(__dirname, "../.data");
 
 const KLAWLEY_SA: Address = "0x097677d3e2cde65af10be80ae5e67b8b68eb613d";
-
-// Zora coins use a bonding curve — we estimate value by quoting sell via the quoter.
-// For simplicity we use the v4Quoter estimateSellValue from sell-monitor.
-const WETH: Address = "0x4200000000000000000000000000000000000006";
 
 // ---------------------------------------------------------------------------
 // DB schema
@@ -75,29 +71,6 @@ export interface PortfolioSnapshot {
   ethPriceUsd: number | null;
   openPositions: number;
   holdings: { coinAddress: string; symbol: string; tokens: string; valueWei: string }[];
-}
-
-type ReadClient = Client<Transport, Chain | undefined>;
-
-async function estimateSellValue(
-  client: ReadClient,
-  coinAddress: Address,
-  tokenAmount: bigint,
-): Promise<bigint | null> {
-  try {
-    // Use the quoter from the server package
-    const quoterPath = new URL("../../server/src/services/v4Quoter.js", import.meta.url).pathname;
-    const { quoteExactInputSingle } = await import(quoterPath);
-    const quote = await quoteExactInputSingle({
-      tokenIn: coinAddress,
-      tokenOut: WETH,
-      amountIn: tokenAmount,
-      client,
-    });
-    return quote;
-  } catch {
-    return null;
-  }
 }
 
 // Well-known tokens to always check (beyond open positions)
@@ -171,7 +144,7 @@ export async function takeSnapshot(dbPath?: string): Promise<PortfolioSnapshot> 
       let valueWei = 0n;
 
       // Try quoter first (works for Zora coins with Doppler pools)
-      const quoterValue = await estimateSellValue(client, addr as Address, onChainBalance);
+      const quoterValue = await estimateSellValue(addr as Address, onChainBalance);
       if (quoterValue !== null && quoterValue > 0n) {
         valueWei = quoterValue;
       } else if (meta.priceSource) {

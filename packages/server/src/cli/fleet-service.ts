@@ -48,7 +48,7 @@ function parsePm2List(output: string): Pm2ProcessInfo[] {
     return Array.isArray(parsed) ? (parsed as Pm2ProcessInfo[]) : [];
   } catch {
     return [];
-  }
+  } 
 }
 
 function parseHealthResponse(data: unknown): HealthResponse | undefined {

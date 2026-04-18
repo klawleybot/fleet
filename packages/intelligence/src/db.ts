@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { env } from "./config.js";
+import type { CoinNode } from "./zora-sdk.js";
 
 for (const p of [path.dirname(env.DB_PATH), "./logs", "./runtime", "./data"]) {
   fs.mkdirSync(p, { recursive: true });
@@ -166,7 +167,7 @@ if (!hasAnalyticsCol("swap_count_prev_1h")) db.exec("ALTER TABLE coin_analytics 
 if (!hasAnalyticsCol("momentum_score_1h")) db.exec("ALTER TABLE coin_analytics ADD COLUMN momentum_score_1h REAL NOT NULL DEFAULT 0");
 if (!hasAnalyticsCol("momentum_acceleration_1h")) db.exec("ALTER TABLE coin_analytics ADD COLUMN momentum_acceleration_1h REAL NOT NULL DEFAULT 0");
 
-export function upsertCoin(node: any) {
+export function upsertCoin(node: CoinNode) {
   db.prepare(`
     INSERT INTO coins (
       address, name, symbol, coin_type, creator_address, created_at,

@@ -44,6 +44,41 @@ export interface ScorerConfig {
   blacklist: Set<string>;
 }
 
+interface TrendPostUpdateValues {
+  id: number;
+  content_coin_address?: string;
+  status?: string;
+  deployed_at?: string;
+  image_url?: string;
+  commentary?: string;
+  name?: string;
+  symbol?: string;
+  discord_message_id?: string;
+}
+
+interface PendingTrendPostRow {
+  id: number;
+  trend_address: string;
+  trend_symbol: string;
+  name: string | null;
+  symbol: string | null;
+  image_url: string | null;
+  commentary: string | null;
+  score: number | null;
+  created_at: string;
+}
+
+interface DueForSellRow {
+  id: number;
+  content_coin_address: string;
+  trend_symbol: string;
+  deployed_at: string;
+}
+
+interface DueForSellSoonRow extends DueForSellRow {
+  sell_after: string;
+}
+
 const DEFAULT_CONFIG: ScorerConfig = {
   minVolume24h: 500,
   minHolders: 2,
@@ -263,7 +298,7 @@ export class TrendScorer {
     discordMessageId?: string;
   }): void {
     const sets: string[] = [];
-    const values: any = { id };
+    const values: TrendPostUpdateValues = { id };
 
     if (updates.contentCoinAddress !== undefined) {
       sets.push("content_coin_address = @content_coin_address");
@@ -321,7 +356,7 @@ export class TrendScorer {
     // Try by ID first
     const byId = this.db.prepare(`
       SELECT * FROM trend_posts WHERE id = ? AND status = 'pending'
-    `).get(parseInt(query) || -1) as any;
+    `).get(Number.parseInt(query, 10) || -1) as PendingTrendPostRow | undefined;
     if (byId) return byId;
 
     // Try by trend symbol (case-insensitive)
@@ -329,7 +364,7 @@ export class TrendScorer {
       SELECT * FROM trend_posts WHERE status = 'pending'
       AND (LOWER(trend_symbol) = LOWER(?) OR LOWER(symbol) = LOWER(?))
       ORDER BY id DESC LIMIT 1
-    `).get(query, query) as any;
+    `).get(query, query) as PendingTrendPostRow | undefined;
     return bySym ?? null;
   }
 
@@ -342,7 +377,7 @@ export class TrendScorer {
       WHERE content_coin_address IS NOT NULL
       AND (status = 'deployed' OR status = 'partial_sold')
       AND datetime(sell_after) <= datetime('now')
-    `).all() as any[];
+    `).all() as DueForSellRow[];
   }
 
   /**
@@ -363,7 +398,7 @@ export class TrendScorer {
       AND (status = 'deployed' OR status = 'partial_sold')
       AND datetime(sell_after) > datetime('now')
       AND datetime(sell_after) <= datetime('now', '+${windowMinutes} minutes')
-    `).all() as any[];
+    `).all() as DueForSellSoonRow[];
   }
 
   /**
@@ -395,6 +430,6 @@ export class TrendScorer {
       SELECT id, trend_address, trend_symbol, name, symbol, image_url, commentary, score, created_at
       FROM trend_posts WHERE status = 'pending'
       ORDER BY id DESC
-    `).all() as any[];
+    `).all() as PendingTrendPostRow[];
   }
 }

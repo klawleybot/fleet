@@ -38,14 +38,13 @@ import {
 import { dripSwap } from "../services/trade.js";
 import {
   requestSupportCoinOperation,
-  requestExitCoinOperation,
   approveAndExecuteOperation,
 } from "../services/operations.js";
 import { addToWatchlist } from "../services/zoraSignals.js";
 import { db } from "../db/index.js";
 import { swapFromSmartAccount } from "../services/cdp.js";
 import { recordTradePosition } from "../services/monitor.js";
-import { makePoolKey, quoteMultiHop } from "../services/quoter.js";
+import { quoteMultiHop } from "../services/quoter.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -144,7 +143,7 @@ async function cmdBuy(coin: Address, amountEth: string, slippageBps: number) {
   console.log("Submitting buy...");
   const hash = await sendUserOperation(bundlerClient, {
     account: smartAccount,
-    calls: [{ to: encoded.to, value: encoded.value, data: encoded.data as `0x${string}` }],
+    calls: [{ to: encoded.to, value: encoded.value, data: encoded.data }],
   });
   console.log(`UserOp: ${hash}`);
 
@@ -217,7 +216,7 @@ async function cmdSell(coin: Address, slippageBps: number) {
 
   const calls = [
     ...permit2Calls,
-    { to: encoded.to, value: encoded.value, data: encoded.data as `0x${string}` },
+    { to: encoded.to, value: encoded.value, data: encoded.data },
   ];
 
   console.log(`Submitting sell (${calls.length} calls)...`);
@@ -445,7 +444,11 @@ async function handleFleet(args: string[]): Promise<void> {
         }
       } else {
         // Auto-add to watchlist so policy check passes for manual CLI buys
-        try { addToWatchlist(coin, { label: "cli-buy", notes: `Manual CLI buy` }); } catch {}
+        try {
+          addToWatchlist(coin, { label: "cli-buy", notes: "Manual CLI buy" });
+        } catch {
+          // Watchlist support is best-effort for manual CLI buys.
+        }
 
         const op = requestSupportCoinOperation({
           clusterId: fleet.clusterId,
@@ -492,7 +495,7 @@ async function handleFleet(args: string[]): Promise<void> {
         const balance = await getCoinBalance(
           client as unknown as CoinRouteClient,
           coin,
-          wallet.address as Address,
+          wallet.address,
         );
 
         if (balance === 0n) {
@@ -530,7 +533,8 @@ async function handleFleet(args: string[]): Promise<void> {
           }
         } catch (err) {
           failures++;
-          console.log(`    ❌ ${err instanceof Error ? err.message.slice(0, 120) : err}`);
+          const errorMessage = err instanceof Error ? err.message.slice(0, 120) : String(err);
+          console.log(`    ❌ ${errorMessage}`);
         }
       }
 
@@ -719,7 +723,9 @@ async function main() {
     const { initIntelligenceEngine } = await import("../services/intelligence.js");
     const dbPath = process.env.ZORA_INTEL_DB_PATH;
     initIntelligenceEngine(dbPath ? { dbPath } : {});
-  } catch {}
+  } catch {
+    // Intelligence engine is optional for CLI usage.
+  }
 
   const args = process.argv.slice(2);
   const cmd = args[0];
@@ -826,4 +832,4 @@ Autonomy Commands:
   }
 }
 
-main();
+void main();

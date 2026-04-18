@@ -17,6 +17,12 @@ type Row = {
   coin_amount: number | null;
 };
 
+type CoinRow = {
+  symbol: string | null;
+  name: string | null;
+  address: string;
+};
+
 export function defaultMediaOut(fileName: string) {
   const defaultOutDir = process.env.OPENCLAW_MEDIA_DIR || path.join(process.env.HOME || "/tmp", ".openclaw", "media");
   return path.join(defaultOutDir, fileName);
@@ -32,7 +38,7 @@ export async function buildPriceVolumeChart(input: {
   const hours = Math.max(1, Math.min(168, Number(input.hours ?? 24)));
   const bucketMinutes = Math.max(1, Math.min(60, Number(input.bucketMinutes ?? 15)));
 
-  const coin = db.prepare(`SELECT symbol, name, address FROM coins WHERE address = ?`).get(addr) as any;
+  const coin = db.prepare(`SELECT symbol, name, address FROM coins WHERE address = ?`).get(addr) as CoinRow | undefined;
   if (!coin) throw new Error(`coin not found: ${addr}`);
 
   const rows = db.prepare(`

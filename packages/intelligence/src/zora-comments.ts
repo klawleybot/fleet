@@ -184,8 +184,6 @@ export async function postComment(
   // then _comment checks commentIdentifier.commenter == msg.sender.
   // So commenter MUST be the smart wallet address.
   // Pass smart wallet as commenterSmartWallet too so isOwner() check uses it.
-  const eoaAddress = account.address;
-
   const calldata = encodeFunctionData({
     abi: COMMENTS_ABI,
     functionName: "comment",
@@ -297,8 +295,12 @@ async function main() {
     sw,
   );
 
-  console.log("\nResult:", JSON.stringify(result, (_, v) =>
-    typeof v === "bigint" ? v.toString() : v, 2));
+  console.log(
+    "\nResult:",
+    JSON.stringify(result, (_key, value: unknown): unknown => (
+      typeof value === "bigint" ? value.toString() : value
+    ), 2),
+  );
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

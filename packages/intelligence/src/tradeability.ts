@@ -138,8 +138,8 @@ export async function checkTradeabilityBatch(
     );
 
     for (let j = 0; j < batch.length; j++) {
-      const addr = batch[j]!.toLowerCase();
-      const probe = probes[j]!;
+      const addr = batch[j].toLowerCase();
+      const probe = probes[j];
       if (probe.status === "fulfilled") {
         const result = probe.value;
         results.set(addr, { ...result, cached: false });
@@ -161,90 +161,6 @@ export async function checkTradeabilityBatch(
   return results;
 }
 
-// ---------------------------------------------------------------------------
-// V4 quote probe (eth_call, no gas)
-// ---------------------------------------------------------------------------
-
-const QUOTER: Address = "0x0d5e0f971ed27fbff6c2837bf31316121532048d";
-const NATIVE_ETH: Address = "0x0000000000000000000000000000000000000000";
-
-const quoterAbi = [{
-  name: "quoteExactInputSingle",
-  type: "function",
-  stateMutability: "nonpayable",
-  inputs: [{
-    name: "params",
-    type: "tuple",
-    components: [
-      { name: "poolKey", type: "tuple", components: [
-        { name: "currency0", type: "address" },
-        { name: "currency1", type: "address" },
-        { name: "fee", type: "uint24" },
-        { name: "tickSpacing", type: "int24" },
-        { name: "hooks", type: "address" },
-      ]},
-      { name: "zeroForOne", type: "bool" },
-      { name: "exactAmount", type: "uint128" },
-      { name: "hookData", type: "bytes" },
-    ],
-  }],
-  outputs: [
-    { name: "amountOut", type: "uint256" },
-    { name: "gasEstimate", type: "uint256" },
-  ],
-}] as const;
-
-/**
- * Attempt a minimal V4 quote for a WETH-backed coin.
- * Returns true if any pool param combo succeeds, false otherwise.
- * This is an eth_call — no gas, no side effects.
- */
-async function tryV4Quote(coinAddress: string, rpcUrl?: string): Promise<boolean> {
-  const client = createPublicClient({
-    chain: base,
-    transport: http(rpcUrl || process.env.BASE_RPC_URL),
-  });
-
-  const coin = coinAddress.toLowerCase();
-  const weth = WETH.toLowerCase();
-  const c0 = (weth < coin ? WETH : coinAddress) as Address;
-  const c1 = (weth < coin ? coinAddress : WETH) as Address;
-  const zeroForOne = weth < coin; // selling WETH for coin
-
-  // Common pool param combinations to try
-  const combos = [
-    { fee: 10000, tickSpacing: 200 },
-    { fee: 30000, tickSpacing: 200 },
-    { fee: 3000, tickSpacing: 60 },
-    { fee: 500, tickSpacing: 10 },
-    { fee: 10000, tickSpacing: 60 },
-  ];
-
-  const PROBE_AMOUNT = 1000000000000000n; // 0.001 ETH
-
-  for (const { fee, tickSpacing } of combos) {
-    try {
-      await client.simulateContract({
-        address: QUOTER,
-        abi: quoterAbi,
-        functionName: "quoteExactInputSingle",
-        args: [{
-          poolKey: { currency0: c0, currency1: c1, fee, tickSpacing, hooks: NATIVE_ETH },
-          zeroForOne,
-          exactAmount: PROBE_AMOUNT,
-          hookData: "0x",
-        }],
-      });
-      return true; // Quote succeeded — V4 pool exists with these params
-    } catch {
-      // This combo failed, try next
-    }
-  }
-
-  return false; // All combos failed
-}
-
-// ---------------------------------------------------------------------------
 // On-chain probe
 // ---------------------------------------------------------------------------
 

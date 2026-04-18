@@ -320,7 +320,7 @@ export class BadActorTracker {
           args: { from: actorAddresses },
           fromBlock,
           toBlock: currentBlock,
-        }) as TransferLog[];
+        });
 
         for (const log of logs) {
           const from = log.args?.from?.toLowerCase();

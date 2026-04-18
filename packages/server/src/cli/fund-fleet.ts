@@ -1,5 +1,5 @@
 #!/usr/bin/env tsx
-import { parseEther, formatEther, type Address } from "viem";
+import { parseEther, formatEther } from "viem";
 import { getFleetByName } from "../services/fleet.js";
 import { transferFromSmartAccount, getOrCreateMasterSmartAccount } from "../services/cdp.js";
 
@@ -8,7 +8,8 @@ async function main() {
   if (!fleet) throw new Error("Fleet gamma not found");
 
   const { smartAccount: master } = await getOrCreateMasterSmartAccount();
-  console.log(`Master: ${master.name} (${master.address})`);
+  const masterName = master.name ?? "master";
+  console.log(`Master: ${masterName} (${master.address})`);
   const perWallet = parseEther("0.05") / BigInt(fleet.wallets.length); // 0.002 ETH each
   console.log(`Funding ${fleet.wallets.length} wallets with ${formatEther(perWallet)} ETH each`);
   console.log(`Total: ${formatEther(perWallet * BigInt(fleet.wallets.length))} ETH\n`);
@@ -16,8 +17,8 @@ async function main() {
   for (const wallet of fleet.wallets) {
     process.stdout.write(`  ${wallet.name} (${wallet.address})... `);
     const result = await transferFromSmartAccount({
-      smartAccountName: master.name!,
-      to: wallet.address as Address,
+      smartAccountName: masterName,
+      to: wallet.address,
       amountWei: perWallet,
     });
     console.log(`✅ ${formatEther(perWallet)} ETH — tx: ${result.txHash?.slice(0, 14)}...`);
@@ -25,4 +26,7 @@ async function main() {
   console.log("\nDone!");
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

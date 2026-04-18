@@ -14,6 +14,10 @@ const nonProductionFiles = [
   'packages/**/vitest*.ts',
 ];
 
+const scriptFiles = [
+  'packages/**/scripts/**/*.ts',
+];
+
 const cliEntryFiles = [
   'packages/server/src/cli/**/*.ts',
   'packages/intelligence/src/chart.ts',
@@ -105,6 +109,14 @@ export default tseslint.config(
     files: cliEntryFiles,
     rules: {
       'no-console': 'off',
+    },
+  },
+  {
+    files: scriptFiles,
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-unused-vars': 'off',
+      'no-empty': 'off',
     },
   },
 );

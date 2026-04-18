@@ -28,6 +28,7 @@ import {
   type Address,
 } from "viem";
 import { base } from "viem/chains";
+import type { swapFromSmartAccount as swapFromSmartAccountFn } from "../../server/src/services/cdp.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -36,26 +37,22 @@ import { base } from "viem/chains";
 const KLAWLEY_ACCOUNT_NAME = "klawley";
 const KLAWLEY_SA: Address = (process.env.ZORA_SMART_WALLET as Address) || "0x097677d3e2cde65af10be80ae5e67b8b68eb613d";
 const WETH: Address = "0x4200000000000000000000000000000000000006";
-const NATIVE_ETH: Address = "0x0000000000000000000000000000000000000000";
 const ZORA_TOKEN: Address = "0x1111111111166b7FE7bd91427724B487980aFc69";
-const BASE_CHAIN_ID = 8453;
 
 // ---------------------------------------------------------------------------
 // Lazy imports (avoid loading fleet server deps at module level)
 // ---------------------------------------------------------------------------
 
+type SwapFromSmartAccount = typeof swapFromSmartAccountFn;
+
 async function getSwapFn() {
   // Dynamic import so we can run from the intelligence package
   // pointing at the server's source
   const serverPath = new URL("../../server/src/services/cdp.js", import.meta.url).pathname;
-  const { swapFromSmartAccount } = await import(serverPath);
-  return swapFromSmartAccount as (input: {
-    smartAccountName: string;
-    fromToken: `0x${string}`;
-    toToken: `0x${string}`;
-    fromAmount: bigint;
-    slippageBps: number;
-  }) => Promise<{ userOpHash: `0x${string}`; txHash: `0x${string}` | null; status: string; amountOut?: string }>;
+  const { swapFromSmartAccount } = (await import(serverPath)) as {
+    swapFromSmartAccount: SwapFromSmartAccount;
+  };
+  return swapFromSmartAccount;
 }
 
 function getPublicClient() {
@@ -186,7 +183,6 @@ export async function buyCoin(
     // If execution reverted, cache coin as V3-only so future scouts skip it
     if (msg.includes("execution reverted") || msg.includes("Execution reverted")) {
       try {
-        const { closeTradeabilityDb } = await import("./tradeability.js");
         // Direct DB write — mark as untradeable without re-probing
         const Database = (await import("better-sqlite3")).default;
         const { env } = await import("./config.js");
