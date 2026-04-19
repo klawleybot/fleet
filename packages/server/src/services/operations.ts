@@ -204,12 +204,25 @@ export async function approveAndExecuteOperation(input: {
       const fundingRecords = await distributeFunding({
         toWalletIds: walletIds,
         amountWei,
-        concurrency: 3,
       });
+      const failedFundingRecords = fundingRecords.filter((record) => record.status !== "complete");
+      const resultJson = JSON.stringify({ fundingCount: fundingRecords.length, fundingRecords });
+      if (failedFundingRecords.length > 0) {
+        const detail = failedFundingRecords
+          .map((record) => `walletId=${record.toWalletId}: ${record.errorMessage ?? "unknown error"}`)
+          .join("; ");
+        return db.updateOperation({
+          id: operation.id,
+          status: "failed",
+          resultJson,
+          approvedBy: input.approvedBy ?? null,
+          errorMessage: `Funding failed for ${failedFundingRecords.length}/${fundingRecords.length} wallet(s): ${detail}`,
+        });
+      }
       return db.updateOperation({
         id: operation.id,
         status: "complete",
-        resultJson: JSON.stringify({ fundingCount: fundingRecords.length, fundingRecords }),
+        resultJson,
         approvedBy: input.approvedBy ?? null,
         errorMessage: null,
       });
@@ -238,23 +251,30 @@ export async function approveAndExecuteOperation(input: {
       mode: payload.strategyMode,
       operationId: operation.id,
     });
+    const completedTrades = records.filter((record) => record.status === "complete");
+    const failedTrades = records.filter((record) => record.status !== "complete");
 
     const result = db.updateOperation({
       id: operation.id,
-      status: "complete",
+      status: failedTrades.length > 0 ? "failed" : "complete",
       resultJson: JSON.stringify({ tradeCount: records.length, trades: records }),
       approvedBy: input.approvedBy ?? null,
-      errorMessage: null,
+      errorMessage:
+        failedTrades.length > 0
+          ? `Trade failed for ${failedTrades.length}/${records.length} wallet(s): ${failedTrades
+              .map((record) => `walletId=${record.walletId}: ${record.errorMessage ?? "unknown error"}`)
+              .join("; ")}`
+          : null,
     });
 
     // Auto-track positions in zora-intelligence watchlist
     try {
-      if (isBuy) {
+      if (completedTrades.length > 0 && isBuy) {
         addToWatchlist(payload.coinAddress, {
           label: `fleet-tracked`,
           notes: `Auto-added by fleet operation #${operation.id}`,
         });
-      } else {
+      } else if (completedTrades.length > 0) {
         // On exit, check if any wallets still hold this coin
         const remaining = db.listPositionsByCoin(payload.coinAddress);
         const hasHoldings = remaining.some((p) => {

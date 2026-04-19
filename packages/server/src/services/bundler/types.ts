@@ -24,6 +24,7 @@ export interface UserOperationReceiptRpcResult {
   success?: boolean;
   actualGasCost?: Hex;
   actualGasUsed?: Hex;
+  reason?: string;
 }
 
 export interface UserOperationReceipt {

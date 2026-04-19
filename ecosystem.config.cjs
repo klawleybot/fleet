@@ -1,11 +1,16 @@
+const path = require("node:path");
+
+const ROOT = __dirname;
+const LOG_DIR = path.join(ROOT, "logs");
+
 module.exports = {
   apps: [{
     name: "fleet-server",
     script: "bun",
     args: "x tsx packages/server/src/index.ts",
-    cwd: "/home/openclaw/.openclaw/workspace/fleet",
-    log_file: "/home/openclaw/.openclaw/workspace/fleet/logs/fleet.log",
-    error_file: "/home/openclaw/.openclaw/workspace/fleet/logs/fleet-error.log",
+    cwd: ROOT,
+    log_file: path.join(LOG_DIR, "fleet.log"),
+    error_file: path.join(LOG_DIR, "fleet-error.log"),
     time: true,
     autorestart: true,
     max_restarts: 10,

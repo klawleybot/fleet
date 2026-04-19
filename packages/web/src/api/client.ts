@@ -155,8 +155,8 @@ export async function buyFleetCoin(
     intervals?: number;
     jiggle?: boolean;
   },
-): Promise<unknown> {
-  return request(`/fleets/${encodeURIComponent(fleetName)}/buy`, {
+): Promise<{ operation: OperationRecord }> {
+  return request<{ operation: OperationRecord }>(`/fleets/${encodeURIComponent(fleetName)}/buy`, {
     method: "POST",
     body: JSON.stringify(input),
   });
@@ -170,8 +170,8 @@ export async function sellFleetCoin(
     slippageBps: number;
     overMs?: number;
   },
-): Promise<unknown> {
-  return request(`/fleets/${encodeURIComponent(fleetName)}/sell`, {
+): Promise<{ operation: OperationRecord }> {
+  return request<{ operation: OperationRecord }>(`/fleets/${encodeURIComponent(fleetName)}/sell`, {
     method: "POST",
     body: JSON.stringify(input),
   });

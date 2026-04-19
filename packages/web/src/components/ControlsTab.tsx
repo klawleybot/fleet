@@ -159,7 +159,20 @@ function FundPanel({
     setMessage(null);
     try {
       const records = await distributeFunding({ toWalletIds: Array.from(selected), amountWei });
-      setMessage({ type: "ok", text: `Queued ${records.length} funding tx(s).` });
+      const failures = records.filter((record) => record.status !== "complete");
+      if (failures.length > 0) {
+        const detail = failures
+          .slice(0, 3)
+          .map((record) => `wallet ${record.toWalletId}: ${record.errorMessage ?? "failed"}`)
+          .join("; ");
+        const extra = failures.length > 3 ? ` (+${failures.length - 3} more)` : "";
+        setMessage({
+          type: "err",
+          text: `Funded ${records.length - failures.length}/${records.length} wallet(s). ${detail}${extra}`,
+        });
+      } else {
+        setMessage({ type: "ok", text: `Funded ${records.length} wallet(s).` });
+      }
     } catch (err) {
       setMessage({ type: "err", text: err instanceof Error ? err.message : "Failed" });
     } finally {
@@ -332,20 +345,27 @@ function FleetTradePanel({ fleetNames }: { fleetNames: string[] }) {
     setIsBusy(true);
     setMessage(null);
     try {
-      if (side === "buy") {
-        await buyFleetCoin(fleetName, {
-          coinAddress: coinAddress as `0x${string}`,
-          totalAmountWei,
-          slippageBps,
+      const result =
+        side === "buy"
+          ? await buyFleetCoin(fleetName, {
+              coinAddress: coinAddress as `0x${string}`,
+              totalAmountWei,
+              slippageBps,
+            })
+          : await sellFleetCoin(fleetName, {
+              coinAddress: coinAddress as `0x${string}`,
+              totalAmountWei,
+              slippageBps,
+            });
+      const operation = result.operation;
+      if (operation.status === "failed") {
+        setMessage({
+          type: "err",
+          text: operation.errorMessage ?? `${side === "buy" ? "Buy" : "Sell"} failed.`,
         });
       } else {
-        await sellFleetCoin(fleetName, {
-          coinAddress: coinAddress as `0x${string}`,
-          totalAmountWei,
-          slippageBps,
-        });
+        setMessage({ type: "ok", text: `${side === "buy" ? "Buy" : "Sell"} complete.` });
       }
-      setMessage({ type: "ok", text: `${side === "buy" ? "Buy" : "Sell"} submitted.` });
     } catch (err) {
       setMessage({ type: "err", text: err instanceof Error ? err.message : "Failed" });
     } finally {

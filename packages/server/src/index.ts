@@ -34,7 +34,7 @@ import { db } from "./db/index.js";
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(pinoHttp({ logger }));
+app.use(pinoHttp({ logger, autoLogging: false }));
 
 const startedAt = new Date().toISOString();
 let cachedMasterBalanceEth: string | null = null;

@@ -92,6 +92,15 @@ function packHookSlot(hooks: Address): Hex {
   return ("0x" + padding + hooks.slice(2).toLowerCase()) as Hex;
 }
 
+function packSplitParamsSlot(fee: number, tickSpacing: number, extra = 0x1f04): Hex {
+  const body =
+    "0".repeat(50) +
+    tickSpacing.toString(16).padStart(2, "0") +
+    fee.toString(16).padStart(6, "0") +
+    extra.toString(16).padStart(6, "0");
+  return (`0x${body}`) as Hex;
+}
+
 const CURRENCY = "0xaabbccddee1111111111111111111111111111aa" as Address;
 const HOOKS = "0xff00ff00ff00ff00ff00ff00ff00ff00ff001040" as Address;
 const ZERO_SLOT = ("0x" + "0".repeat(64)) as Hex;
@@ -128,6 +137,35 @@ describe("poolDiscovery", () => {
     expect(params.tickSpacing).toBe(10);
     expect(params.hooks).toBe("0x2222222222222222222222222222222222222222");
     expect(params.hookData).toBe("0x");
+  });
+
+  it("prefers coin-native getPoolKey when available", async () => {
+    const client = {
+      getLogs: async () => [] as Log[],
+      readContract: async ({ functionName }: { functionName: string }) => {
+        if (functionName === "getPoolKey") {
+          return {
+            currency0: CURRENCY,
+            currency1: COIN,
+            fee: 8_388_608,
+            tickSpacing: 200,
+            hooks: HOOKS,
+          };
+        }
+        if (functionName === "currency") return CURRENCY;
+        throw new Error(`Unexpected function ${functionName}`);
+      },
+    };
+
+    const params = await discoverPoolParams({
+      client,
+      chainId: CHAIN_ID,
+      coinAddress: COIN,
+    });
+
+    expect(params.fee).toBe(8_388_608);
+    expect(params.tickSpacing).toBe(200);
+    expect(params.hooks).toBe(HOOKS);
   });
 
   it("falls back to storage slots when no events found", async () => {
@@ -185,6 +223,25 @@ describe("poolDiscovery", () => {
     expect(params.fee).toBe(3000);
     expect(params.tickSpacing).toBe(60);
     expect(params.hooks).toBe("0x0000000000000000000000000000000000000000");
+  });
+
+  it("falls back to split-layout storage for nested content coins", async () => {
+    const client = makeStorageClient({
+      2: ("0x" + "0".repeat(24) + CURRENCY.slice(2).toLowerCase()) as Hex,
+      3: ("0x" + "0".repeat(24) + COIN.slice(2).toLowerCase()) as Hex,
+      4: packHookSlot(HOOKS),
+      5: packSplitParamsSlot(10000, 200),
+    });
+
+    const params = await discoverPoolParams({
+      client,
+      chainId: CHAIN_ID,
+      coinAddress: COIN,
+    });
+
+    expect(params.fee).toBe(10000);
+    expect(params.tickSpacing).toBe(200);
+    expect(params.hooks).toBe(HOOKS.toLowerCase());
   });
 
   it("throws when both strategies fail (no events, no storage)", async () => {

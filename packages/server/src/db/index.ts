@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { runMigrations } from "./schema.js";
@@ -436,14 +437,32 @@ function mapCampaignExecution(row: CampaignExecutionRow): CampaignExecutionRecor
 
 let _sqlite: Database.Database | null = null;
 
-function resolveDbPath(): string {
-  const envPath = process.env.SQLITE_PATH?.trim();
+function resolveVitestSafeDbPath(dbPath: string): string {
+  if (dbPath === ":memory:") return dbPath;
 
-  if (process.env.VITEST && !envPath) {
-    throw new Error(
-      "DB safety violation: Vitest is active but SQLITE_PATH is not set. " +
-        "Add env.SQLITE_PATH to your vitest config so tests never touch the production database.",
-    );
+  const resolvedPath = path.resolve(dbPath);
+  const tmpRoot = path.resolve(os.tmpdir());
+  if (resolvedPath === tmpRoot || resolvedPath.startsWith(`${tmpRoot}${path.sep}`)) {
+    return resolvedPath;
+  }
+
+  throw new Error(
+    `DB safety violation: Vitest is active but SQLITE_PATH points outside os.tmpdir(): ${resolvedPath}`,
+  );
+}
+
+function resolveDbPath(): string {
+  const envPath = process.env.VITEST_SQLITE_PATH?.trim() || process.env.SQLITE_PATH?.trim();
+
+  if (process.env.VITEST) {
+    if (!envPath) {
+      throw new Error(
+        "DB safety violation: Vitest is active but SQLITE_PATH is not set. " +
+          "Add env.VITEST_SQLITE_PATH (or SQLITE_PATH) to your vitest config so tests never touch the production database.",
+      );
+    }
+
+    return resolveVitestSafeDbPath(envPath);
   }
 
   if (envPath) return path.resolve(envPath);

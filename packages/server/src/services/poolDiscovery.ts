@@ -32,6 +32,58 @@ const currencyAbi = [
   },
 ] as const;
 
+const getPoolKeyAbi = [
+  {
+    name: "getPoolKey",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "tuple",
+        components: [
+          { name: "currency0", type: "address" },
+          { name: "currency1", type: "address" },
+          { name: "fee", type: "uint24" },
+          { name: "tickSpacing", type: "int24" },
+          { name: "hooks", type: "address" },
+        ],
+      },
+    ],
+  },
+] as const;
+
+async function readPoolParamsFromContract(
+  client: PoolDiscoveryClient,
+  coinAddress: Address,
+): Promise<HopPoolParams | null> {
+  if (!client.readContract) return null;
+
+  try {
+    const poolKey = await client.readContract({
+      address: coinAddress,
+      abi: getPoolKeyAbi,
+      functionName: "getPoolKey",
+    }) as {
+      fee: number;
+      tickSpacing: number;
+      hooks: Address;
+    };
+
+    if (!poolKey?.hooks) return null;
+
+    return {
+      fee: Number(poolKey.fee),
+      tickSpacing: Number(poolKey.tickSpacing),
+      hooks: poolKey.hooks,
+      hookData: "0x",
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Storage-slot fallback
 // ---------------------------------------------------------------------------
@@ -111,6 +163,41 @@ async function readPoolParamsFromStorage(
     };
   }
 
+  // Split-layout variant used by some nested content coins:
+  // [currency slot][self slot][hooks slot][params slot]
+  for (let i = 0; i + 3 < slots.length; i++) {
+    const currencySlot = slots[i];
+    const selfSlot = slots[i + 1];
+    const hooksSlot = slots[i + 2];
+    const paramsSlot = slots[i + 3];
+
+    if (!currencySlot || !selfSlot || !hooksSlot || !paramsSlot) continue;
+    if (currencySlot === "0x" + "0".repeat(64)) continue;
+    if (selfSlot === "0x" + "0".repeat(64)) continue;
+    if (hooksSlot === "0x" + "0".repeat(64)) continue;
+    if (paramsSlot === "0x" + "0".repeat(64)) continue;
+
+    const currencyCandidate = currencySlot.slice(26).toLowerCase();
+    const selfCandidate = selfSlot.slice(26).toLowerCase();
+    if (currencyCandidate !== currencyLower) continue;
+    if (selfCandidate !== coinAddress.toLowerCase().slice(2)) continue;
+
+    const hooksCandidate = hooksSlot.slice(26);
+    if (hooksCandidate === "0".repeat(40)) continue;
+
+    const paramsHex = paramsSlot.slice(2);
+    const tickSpacing = parseInt(paramsHex.slice(50, 52), 16);
+    const fee = parseInt(paramsHex.slice(52, 58), 16);
+    if (fee <= 0 || fee > 100000 || tickSpacing <= 0 || tickSpacing > 16384) continue;
+
+    return {
+      fee,
+      tickSpacing,
+      hooks: ("0x" + hooksCandidate) as `0x${string}`,
+      hookData: "0x",
+    };
+  }
+
   return null;
 }
 
@@ -131,6 +218,11 @@ export async function discoverPoolParams(params: {
   coinAddress: Address;
 }): Promise<HopPoolParams> {
   const { client, chainId, coinAddress } = params;
+
+  const contractResult = await readPoolParamsFromContract(client, coinAddress);
+  if (contractResult) {
+    return contractResult;
+  }
 
   const factoryAddress = ZORA_FACTORY_ADDRESSES[chainId];
   if (!factoryAddress) {

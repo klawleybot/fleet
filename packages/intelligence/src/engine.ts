@@ -8,6 +8,7 @@ import { selectDiverseAlerts, type DiversityOptions } from "./alerts-diversity.j
 import { generateBatchCommentary } from "./commentary.js";
 import { TrendCoinIndexer, applyTrendSchema } from "./trend-coins.js";
 import { TrendScorer } from "./trend-scorer.js";
+import { defaultIntelligenceDbPath } from "./paths.js";
 import { addBadActor as _addBadActor, removeBadActor as _removeBadActor, listBadActors as _listBadActors, isBadActor as _isBadActor, getBadActorHoldings as _getBadActorHoldings, detectFSH as _detectFSH, cacheBadActorHoldings, getCachedBadActorHoldings, formatBadActorWarning, type BadActor, type BadActorHolding } from "./bad-actors.js";
 import { BadActorTracker } from "./bad-actor-tracker.js";
 import {
@@ -247,14 +248,9 @@ interface ResolvedConfig {
   watchlistMinNetFlowUsd24h: number;
 }
 
-function defaultDbPath(): string {
-  // Resolve relative to this file's package — packages/intelligence/.data/
-  return new URL("../.data/zora-intelligence.db", import.meta.url).pathname;
-}
-
 function resolveConfig(input: IntelligenceConfig): ResolvedConfig {
   return {
-    dbPath: input.dbPath ?? defaultDbPath(),
+    dbPath: input.dbPath ?? defaultIntelligenceDbPath(),
     zoraChainId: input.zoraChainId ?? 8453,
     pollIntervalSec: input.pollIntervalSec ?? 60,
     swapsPerCoin: input.swapsPerCoin ?? 30,

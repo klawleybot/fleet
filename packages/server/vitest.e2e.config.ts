@@ -18,8 +18,11 @@ export default defineConfig({
     env: {
       // Mock CDP by default. E2e tests that spawn child processes override
       // this in the child's env when needed.
+      VITEST: "1",
       CDP_MOCK_MODE: "1",
       // Redirect any direct DB access away from the production file.
+      VITEST_SQLITE_PATH: testDbPath,
+      VITEST_INTEL_DB_PATH: testIntelDbPath,
       SQLITE_PATH: testDbPath,
       ZORA_INTEL_DB_PATH: testIntelDbPath,
       INTEL_DB_PATH: testIntelDbPath,

@@ -144,17 +144,23 @@ export class BundlerRouter {
     const startedAt = Date.now();
 
     while (Date.now() - startedAt < this.cfg.receiptTimeoutMs) {
-      const [primaryReceipt, secondaryReceipt] = await Promise.all([
-        this.primary.getUserOperationReceipt(userOpHash),
-        this.secondary ? this.secondary.getUserOperationReceipt(userOpHash) : Promise.resolve(null),
-      ]);
-
-      if (primaryReceipt.included) return primaryReceipt;
-      if (secondaryReceipt?.included) return secondaryReceipt;
+      const receipt = await this.getReceipt(userOpHash);
+      if (receipt) return receipt;
 
       await sleep(this.cfg.receiptPollMs);
     }
 
     return { included: false, reason: `receipt timeout after ${this.cfg.receiptTimeoutMs}ms` };
+  }
+
+  async getReceipt(userOpHash: Hex): Promise<UserOperationReceipt | null> {
+    const [primaryReceipt, secondaryReceipt] = await Promise.all([
+      this.primary.getUserOperationReceipt(userOpHash),
+      this.secondary ? this.secondary.getUserOperationReceipt(userOpHash) : Promise.resolve(null),
+    ]);
+
+    if (primaryReceipt.included) return primaryReceipt;
+    if (secondaryReceipt?.included) return secondaryReceipt;
+    return null;
   }
 }

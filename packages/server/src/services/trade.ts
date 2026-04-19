@@ -1,8 +1,10 @@
 import pLimit from "p-limit";
 import { db } from "../db/index.js";
 import { swapFromSmartAccount } from "./cdp.js";
+import { classifyBundlerError } from "./bundler/errors.js";
 import { recordTradePosition } from "./monitor.js";
 import { getWalletBudgets } from "./balance.js";
+import { isSlippageFailureMessage } from "./swapFailure.js";
 import type { StrategyMode, TradeRecord } from "../types.js";
 
 const NATIVE_ETH = "0x0000000000000000000000000000000000000000" as const;
@@ -15,6 +17,107 @@ function isEthLike(addr: string): boolean {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`${name} must be a non-negative integer`);
+  }
+  return value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function parseRetryAfterHeader(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const seconds = Number(trimmed);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.round(seconds * 1000);
+  }
+  const absolute = Date.parse(trimmed);
+  if (Number.isNaN(absolute)) return null;
+  return Math.max(0, absolute - Date.now());
+}
+
+function getHeaderValue(headers: unknown, name: string): string | null {
+  if (!headers) return null;
+  if (typeof headers === "object" && headers !== null && "get" in headers && typeof headers.get === "function") {
+    const value = headers.get(name) ?? headers.get(name.toLowerCase());
+    return typeof value === "string" ? value : null;
+  }
+  if (!isRecord(headers)) return null;
+  const match = Object.entries(headers).find(([key]) => key.toLowerCase() === name.toLowerCase());
+  return typeof match?.[1] === "string" ? match[1] : null;
+}
+
+function getRetryAfterMs(error: unknown, depth = 0): number | null {
+  if (depth > 4 || !isRecord(error)) return null;
+
+  if (typeof error.retryAfterMs === "number" && Number.isFinite(error.retryAfterMs) && error.retryAfterMs >= 0) {
+    return Math.round(error.retryAfterMs);
+  }
+  if (typeof error.retryAfter === "number" && Number.isFinite(error.retryAfter) && error.retryAfter >= 0) {
+    return Math.round(error.retryAfter * 1000);
+  }
+  if (typeof error.retryAfter === "string") {
+    return parseRetryAfterHeader(error.retryAfter);
+  }
+
+  const responseHeaders =
+    (isRecord(error.response) ? getHeaderValue(error.response.headers, "retry-after") : null) ??
+    getHeaderValue(error.response, "retry-after");
+  if (responseHeaders) {
+    return parseRetryAfterHeader(responseHeaders);
+  }
+
+  const headersValue = getHeaderValue(error.headers, "retry-after");
+  if (headersValue) {
+    return parseRetryAfterHeader(headersValue);
+  }
+
+  return getRetryAfterMs(error.cause, depth + 1);
+}
+
+function shouldRetryTradeMessage(message: string | null | undefined): boolean {
+  if (!message) return false;
+  if (isSlippageFailureMessage(message)) return true;
+  const { category } = classifyBundlerError(new Error(message));
+  return category === "retryable" || category === "rate_limit" || category === "underpriced";
+}
+
+function shouldRetryTradeError(error: unknown): boolean {
+  if (error instanceof Error && isSlippageFailureMessage(error.message)) return true;
+  const { category } = classifyBundlerError(error);
+  return category === "retryable" || category === "rate_limit" || category === "underpriced";
+}
+
+function getTradeRetryDelayMs(error: unknown, attempt: number): number {
+  const baseMs = parseIntEnv("TRADE_RETRY_BASE_MS", 750);
+  const rateLimitBaseMs = parseIntEnv("TRADE_RATE_LIMIT_BASE_MS", 2_500);
+  const maxMs = parseIntEnv("TRADE_RETRY_MAX_MS", 10_000);
+  const retryAfterMs = getRetryAfterMs(error);
+  if (retryAfterMs !== null) {
+    return Math.min(maxMs, Math.max(0, retryAfterMs));
+  }
+
+  const { category } = classifyBundlerError(error);
+  const base = category === "rate_limit" ? rateLimitBaseMs : baseMs;
+  return Math.min(maxMs, base * 2 ** Math.max(0, attempt - 1));
+}
+
+function compareSwapEntries(
+  a: { walletId: number; amountInWei: bigint },
+  b: { walletId: number; amountInWei: bigint },
+): number {
+  if (a.amountInWei < b.amountInWei) return -1;
+  if (a.amountInWei > b.amountInWei) return 1;
+  return a.walletId - b.walletId;
 }
 
 // ---------------------------------------------------------------------------
@@ -78,60 +181,93 @@ async function executeSingleSwap(input: {
     throw new Error(`Wallet ${input.walletId} was not found.`);
   }
 
-  try {
-    const result = await swapFromSmartAccount({
-      smartAccountName: wallet.cdpAccountName,
-      fromToken: input.fromToken,
-      toToken: input.toToken,
-      fromAmount: input.amountInWei,
-      slippageBps: input.slippageBps,
-    });
+  const maxAttempts = Math.max(1, parseIntEnv("TRADE_MAX_ATTEMPTS", 2));
 
-    const isComplete = result.status === "complete";
-    const trade = db.createTrade({
-      walletId: wallet.id,
-      fromToken: input.fromToken,
-      toToken: input.toToken,
-      amountIn: input.amountInWei.toString(),
-      amountOut: result.amountOut ?? null,
-      operationId: input.operationId ?? null,
-      userOpHash: result.userOpHash,
-      txHash: result.txHash,
-      status: isComplete ? "complete" : "failed",
-      errorMessage: isComplete ? null : `Status ${result.status}`,
-    });
-
-    // Record position impact on successful trades
-    if (isComplete) {
-      const isBuy = isEthLike(input.fromToken);
-      const coinAddress = isBuy ? input.toToken : input.fromToken;
-      const ethAmount = input.amountInWei.toString();
-      const tokenAmount = result.amountOut ?? "0";
-
-      recordTradePosition({
-        walletId: wallet.id,
-        coinAddress,
-        isBuy,
-        ethAmountWei: isBuy ? ethAmount : tokenAmount,
-        tokenAmount: isBuy ? tokenAmount : ethAmount,
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const result = await swapFromSmartAccount({
+        smartAccountName: wallet.cdpAccountName,
+        fromToken: input.fromToken,
+        toToken: input.toToken,
+        fromAmount: input.amountInWei,
+        slippageBps: input.slippageBps,
       });
-    }
 
-    return trade;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown swap error";
-    return db.createTrade({
-      walletId: wallet.id,
-      fromToken: input.fromToken,
-      toToken: input.toToken,
-      amountIn: input.amountInWei.toString(),
-      operationId: input.operationId ?? null,
-      userOpHash: null,
-      txHash: null,
-      status: "failed",
-      errorMessage: message,
-    });
+      if (result.status === "complete") {
+        const trade = db.createTrade({
+          walletId: wallet.id,
+          fromToken: input.fromToken,
+          toToken: input.toToken,
+          amountIn: input.amountInWei.toString(),
+          amountOut: result.amountOut ?? null,
+          operationId: input.operationId ?? null,
+          userOpHash: result.userOpHash,
+          txHash: result.txHash,
+          status: "complete",
+          errorMessage: null,
+        });
+
+        const isBuy = isEthLike(input.fromToken);
+        const coinAddress = isBuy ? input.toToken : input.fromToken;
+        const ethAmount = input.amountInWei.toString();
+        const tokenAmount = result.amountOut ?? "0";
+
+        recordTradePosition({
+          walletId: wallet.id,
+          coinAddress,
+          isBuy,
+          ethAmountWei: isBuy ? ethAmount : tokenAmount,
+          tokenAmount: isBuy ? tokenAmount : ethAmount,
+        });
+
+        return trade;
+      }
+
+      const failureMessage = result.errorMessage ?? `Status ${result.status}`;
+      if (!shouldRetryTradeMessage(failureMessage) || attempt >= maxAttempts) {
+        return db.createTrade({
+          walletId: wallet.id,
+          fromToken: input.fromToken,
+          toToken: input.toToken,
+          amountIn: input.amountInWei.toString(),
+          amountOut: null,
+          operationId: input.operationId ?? null,
+          userOpHash: result.userOpHash,
+          txHash: result.txHash,
+          status: "failed",
+          errorMessage:
+            attempt > 1
+              ? `Trade failed after ${attempt} attempt(s): ${failureMessage}`
+              : failureMessage,
+        });
+      }
+
+      await sleep(getTradeRetryDelayMs(new Error(failureMessage), attempt));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown swap error";
+      if (!shouldRetryTradeError(error) || attempt >= maxAttempts) {
+        return db.createTrade({
+          walletId: wallet.id,
+          fromToken: input.fromToken,
+          toToken: input.toToken,
+          amountIn: input.amountInWei.toString(),
+          amountOut: null,
+          operationId: input.operationId ?? null,
+          userOpHash: null,
+          txHash: null,
+          status: "failed",
+          errorMessage:
+            attempt > 1
+              ? `Trade failed after ${attempt} attempt(s): ${message}`
+              : message,
+        });
+      }
+
+      await sleep(getTradeRetryDelayMs(error, attempt));
+    }
   }
+
+  throw new Error("Trade failed without a terminal result");
 }
 
 export async function coordinatedSwap(input: {
@@ -158,14 +294,19 @@ export async function coordinatedSwap(input: {
     throw new Error("amountsPerWallet length must match walletIds length");
   }
 
-  const limiter = pLimit(input.concurrency ?? 3);
-  const tasks = input.walletIds.map((walletId, idx) =>
+  const entries = input.walletIds.map((walletId, idx) => ({
+    walletId,
+    amountInWei: amounts[idx]!,
+  }));
+  const orderedEntries = isEthLike(input.fromToken) ? [...entries].sort(compareSwapEntries) : entries;
+  const limiter = pLimit(isEthLike(input.fromToken) ? 1 : (input.concurrency ?? 3));
+  const tasks = orderedEntries.map((entry) =>
     limiter(() =>
       executeSingleSwap({
-        walletId,
+        walletId: entry.walletId,
         fromToken: input.fromToken,
         toToken: input.toToken,
-        amountInWei: amounts[idx]!,
+        amountInWei: entry.amountInWei,
         slippageBps: input.slippageBps,
         operationId: input.operationId ?? null,
       }),
@@ -297,25 +438,44 @@ export async function strategySwap(input: {
     });
   }
 
-  const ordered = shuffle(eligibleWalletIds);
-  // Re-shuffle amounts to match shuffled wallet order
-  const shuffledAmounts = ordered.map((_, idx) => amounts[idx]!);
+  const shuffledEntries = shuffle(
+    eligibleWalletIds.map((walletId, idx) => ({
+      walletId,
+      amountInWei: amounts[idx]!,
+    })),
+  );
   const waveSize = Math.max(1, Math.min(10, input.waveSize ?? 3));
   const maxDelayMs = Math.max(100, input.maxDelayMs ?? 4000);
 
   const results: TradeRecord[] = [];
-  for (let i = 0; i < ordered.length; i += waveSize) {
-    const wave = ordered.slice(i, i + waveSize);
-    const waveAmounts = shuffledAmounts.slice(i, i + waveSize);
+  for (let i = 0; i < shuffledEntries.length; i += waveSize) {
+    const wave = shuffledEntries.slice(i, i + waveSize);
+    if (isBuy) {
+      const orderedWave = [...wave].sort(compareSwapEntries);
+      for (const entry of orderedWave) {
+        const jitter = Math.floor(Math.random() * maxDelayMs);
+        await sleep(jitter);
+        results.push(await executeSingleSwap({
+          walletId: entry.walletId,
+          fromToken: input.fromToken,
+          toToken: input.toToken,
+          amountInWei: entry.amountInWei,
+          slippageBps: input.slippageBps,
+          operationId: input.operationId ?? null,
+        }));
+      }
+      continue;
+    }
+
     const waveResults = await Promise.all(
-      wave.map(async (walletId, idx) => {
+      wave.map(async (entry) => {
         const jitter = Math.floor(Math.random() * maxDelayMs);
         await sleep(jitter);
         return executeSingleSwap({
-          walletId,
+          walletId: entry.walletId,
           fromToken: input.fromToken,
           toToken: input.toToken,
-          amountInWei: waveAmounts[idx]!,
+          amountInWei: entry.amountInWei,
           slippageBps: input.slippageBps,
           operationId: input.operationId ?? null,
         });

@@ -4,7 +4,9 @@ import path from "node:path";
 import { initIntelligenceEngine } from "../src/services/intelligence.js";
 
 // Initialize the intelligence engine with a temp DB for tests.
-const testIntelDb = process.env.ZORA_INTEL_DB_PATH || path.join(os.tmpdir(), `fleet-intel-test-${process.pid}.db`);
+const testIntelDb = process.env.VITEST_INTEL_DB_PATH || path.join(os.tmpdir(), `fleet-intel-test-${process.pid}.db`);
+process.env.VITEST = "1";
+process.env.VITEST_INTEL_DB_PATH = testIntelDb;
 process.env.ZORA_INTEL_DB_PATH = testIntelDb;
 process.env.INTEL_DB_PATH = testIntelDb;
 process.env.DB_PATH = testIntelDb;

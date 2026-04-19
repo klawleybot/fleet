@@ -1,5 +1,8 @@
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, beforeEach } from "vitest";
 import { isCoinInWatchlist, selectSignalCoin, topMovers, watchlistSignals } from "../src/services/zoraSignals.js";
+import { _resetEngine, getIntelligenceEngine } from "../src/services/intelligence.js";
 import { seedCoin, seedAnalytics, seedWatchlist, cleanIntelDb } from "./intel-fixtures.js";
 
 const ADDR_A = "0x1111111111111111111111111111111111111111" as `0x${string}`;
@@ -15,6 +18,18 @@ beforeEach(() => {
 });
 
 describe("zora signal selectors", () => {
+  it("lazily initializes the intelligence engine on first signal lookup", () => {
+    _resetEngine();
+
+    const rows = topMovers({ limit: 2 });
+    const dbPath = path.resolve(getIntelligenceEngine().config.dbPath);
+    const tmpRoot = path.resolve(os.tmpdir());
+
+    expect(rows.length).toBe(2);
+    expect(rows[0]?.coinAddress).toBe(ADDR_B);
+    expect(dbPath.startsWith(`${tmpRoot}${path.sep}`)).toBe(true);
+  });
+
   it("returns top movers ordered by momentum", () => {
     const rows = topMovers({ limit: 2 });
     expect(rows.length).toBe(2);

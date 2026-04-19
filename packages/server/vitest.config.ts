@@ -19,7 +19,10 @@ export default defineConfig({
     env: {
       // Default to mock mode for unit tests that import services directly.
       // E2E tests that spawn child processes set their own env.
+      VITEST: "1",
       CDP_MOCK_MODE: "1",
+      VITEST_SQLITE_PATH: testDbPath,
+      VITEST_INTEL_DB_PATH: testIntelDbPath,
       SQLITE_PATH: testDbPath,
       ZORA_INTEL_DB_PATH: testIntelDbPath,
       INTEL_DB_PATH: testIntelDbPath,

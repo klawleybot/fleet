@@ -1,26 +1,28 @@
 import dotenv from "dotenv";
 import path from "node:path";
 import { z } from "zod";
+import { defaultIntelligenceDbPath, resolveVitestSafeDbPath } from "./paths.js";
 
 dotenv.config({ quiet: true });
 
-function defaultDbPath(): string {
-  return new URL("../.data/zora-intelligence.db", import.meta.url).pathname;
-}
-
 function resolveDbPath(): string {
-  const explicitPath = process.env.ZORA_INTEL_DB_PATH?.trim()
+  const explicitPath = process.env.VITEST_INTEL_DB_PATH?.trim()
+    || process.env.ZORA_INTEL_DB_PATH?.trim()
     || process.env.INTEL_DB_PATH?.trim()
     || process.env.DB_PATH?.trim();
 
-  if (process.env.VITEST && !explicitPath) {
-    throw new Error(
-      "DB safety violation: Vitest is active but no intelligence DB path is set. " +
-      "Set ZORA_INTEL_DB_PATH, INTEL_DB_PATH, or DB_PATH in test env so tests never touch the default intelligence database.",
-    );
+  if (process.env.VITEST) {
+    if (!explicitPath) {
+      throw new Error(
+        "DB safety violation: Vitest is active but no intelligence DB path is set. " +
+        "Set VITEST_INTEL_DB_PATH (or ZORA_INTEL_DB_PATH / INTEL_DB_PATH / DB_PATH) to a temp test database.",
+      );
+    }
+
+    return resolveVitestSafeDbPath(explicitPath, "intelligence DB path");
   }
 
-  return path.resolve(explicitPath || defaultDbPath());
+  return path.resolve(explicitPath || defaultIntelligenceDbPath());
 }
 
 const envSchema = z.object({

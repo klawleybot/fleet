@@ -17,6 +17,11 @@ export function initIntelligenceEngine(config?: {
 
   const zoraApiKey = config?.zoraApiKey ?? process.env.ZORA_API_KEY;
   const zoraChainId = config?.zoraChainId ?? (process.env.ZORA_CHAIN_ID ? Number(process.env.ZORA_CHAIN_ID) : undefined);
+  const dbPath = config?.dbPath
+    ?? process.env.VITEST_INTEL_DB_PATH
+    ?? process.env.ZORA_INTEL_DB_PATH
+    ?? process.env.INTEL_DB_PATH
+    ?? process.env.DB_PATH;
 
   // Parse optional alert threshold overrides from env
   const envNum = (key: string) => {
@@ -38,7 +43,7 @@ export function initIntelligenceEngine(config?: {
   engine = new IntelligenceEngine({
     ...(zoraApiKey ? { zoraApiKey } : {}),
     ...(zoraChainId !== undefined ? { zoraChainId } : {}),
-    ...(config?.dbPath ? { dbPath: config.dbPath } : {}),
+    ...(dbPath ? { dbPath } : {}),
     ...Object.fromEntries(
       Object.entries(optionalNumbers).filter(([, value]) => value !== undefined),
     ),
@@ -49,7 +54,9 @@ export function initIntelligenceEngine(config?: {
 }
 
 export function getIntelligenceEngine(): IntelligenceEngine {
-  if (!engine) throw new Error("Intelligence engine not initialized — call initIntelligenceEngine() first");
+  if (!engine) {
+    return initIntelligenceEngine();
+  }
   return engine;
 }
 

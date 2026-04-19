@@ -21,6 +21,7 @@ import {
 import { getChainConfig } from "./network.js";
 import { createSponsoredBundlerClient } from "./bundler/config.js";
 import { getBundlerRouter } from "./bundler/index.js";
+import type { UserOperationReceipt } from "./bundler/types.js";
 import { resolveDeterministicBuyRoute, resolveDeterministicSellRoute } from "./swapRoute.js";
 import { resolveCoinRoute, type CoinRouteClient } from "./coinRoute.js";
 import { encodeV4ExactInSwap, getRouterAddress } from "./v4SwapEncoder.js";
@@ -29,6 +30,7 @@ import { ensurePermit2Approval } from "./erc20.js";
 import { encodeV3ExactInSwapCall } from "./v3SwapEncoder.js";
 import { quoteV3ExactInput } from "./quoter.js";
 import { discoverPoolParams } from "./poolDiscovery.js";
+import { describeSwapFailure } from "./swapFailure.js";
 
 const OWNER_ACCOUNT_NAME = "fleet-owner";
 const MASTER_SMART_ACCOUNT_NAME = "master";
@@ -78,6 +80,7 @@ function asBundlerExecutionClient(client: BundlerExecutionClient): BundlerExecut
 
 function toCoinRouteClient(client: ReturnType<typeof localPublicClient>): CoinRouteClient {
   return {
+    getLogs: (args) => client.getLogs(args),
     readContract: (args) => client.readContract(args),
     getStorageAt: (args) => client.getStorageAt(args),
   };
@@ -120,6 +123,11 @@ function extractTransactionHash(receipt: unknown, context: string): `0x${string}
   const value = (receipt as { transactionHash?: string | null }).transactionHash;
   if (!value) return null;
   return assertHash(value, context);
+}
+
+function describeFailedReceipt(receipt: UserOperationReceipt | null | undefined): string | null {
+  if (!receipt) return null;
+  return describeSwapFailure(receipt.reason) ?? receipt.reason ?? null;
 }
 
 function hexToPrefixedHex(value: string, context: string): `0x${string}` {
@@ -236,7 +244,7 @@ async function getLocalSmartAccountAddress(name: string): Promise<`0x${string}`>
 async function submitUserOperationViaRouter(input: {
   smartAccountName: string;
   calls: Array<{ to: `0x${string}`; value: bigint; data?: `0x${string}` }>;
-}): Promise<{ userOpHash: `0x${string}`; txHash: `0x${string}` | null; status: string }> {
+}): Promise<{ userOpHash: `0x${string}`; txHash: `0x${string}` | null; status: string; errorMessage?: string }> {
   if (!input.calls.length) throw new Error("calls[] cannot be empty");
 
   try {
@@ -261,11 +269,19 @@ async function submitUserOperationViaRouter(input: {
       hash: userOpHash,
       timeout: 120_000,
     });
+    const bundlerReceipt =
+      receipt.success === false
+        ? await getBundlerRouter().getReceipt(userOpHash).catch(() => null)
+        : null;
+    const failureMessage = bundlerReceipt ? describeFailedReceipt(bundlerReceipt) : null;
 
     return {
       userOpHash,
-      txHash: receipt.receipt.transactionHash ?? null,
+      txHash: bundlerReceipt?.txHash ?? receipt.receipt.transactionHash ?? null,
       status: receipt.success === false ? "failed" : "complete",
+      ...(receipt.success === false
+        ? { errorMessage: failureMessage ?? "Execution reverted" }
+        : {}),
     };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -279,7 +295,7 @@ async function waitForUserOperationWithBundlerFirst(input: {
   userOpHash: `0x${string}`;
   waitWithCdp: () => Promise<CdpUserOperationReceipt>;
   context: string;
-}): Promise<{ status: string; txHash: `0x${string}` | null }> {
+}): Promise<{ status: string; txHash: `0x${string}` | null; errorMessage?: string }> {
   try {
     const bundlerReceipt = await getBundlerRouter().waitForReceipt(input.userOpHash);
     if (bundlerReceipt.included) {
@@ -288,6 +304,9 @@ async function waitForUserOperationWithBundlerFirst(input: {
       return {
         status: success === false ? "failed" : "complete",
         txHash,
+        ...(success === false
+          ? { errorMessage: describeFailedReceipt(bundlerReceipt) ?? "Execution reverted" }
+          : {}),
       };
     }
   } catch {
@@ -298,6 +317,7 @@ async function waitForUserOperationWithBundlerFirst(input: {
   return {
     status: cdpReceipt.status,
     txHash: extractTransactionHash(cdpReceipt, `${input.context} txHash`),
+    ...(cdpReceipt.status === "failed" ? { errorMessage: "Execution reverted" } : {}),
   };
 }
 
@@ -563,7 +583,7 @@ export async function swapFromSmartAccount(input: {
   fromAmount: bigint;
   slippageBps: number;
   network?: SupportedNetwork;
-}): Promise<{ userOpHash: `0x${string}`; txHash: `0x${string}` | null; status: string; amountOut?: string }> {
+}): Promise<{ userOpHash: `0x${string}`; txHash: `0x${string}` | null; status: string; amountOut?: string; errorMessage?: string }> {
   if (isCdpMockMode()) {
     if (!isAddress(input.fromToken) || !isAddress(input.toToken)) {
       throw new Error("Invalid token addresses for mock swap");
@@ -593,6 +613,7 @@ export async function swapFromSmartAccount(input: {
     // Try on-chain route discovery first (coinRoute), fall back to env-var routing
     let routePath: `0x${string}`[];
     let routePoolParams: import("./swapRoute.js").HopPoolParams[] | undefined;
+    let routeDiscoveryError: unknown = null;
 
     try {
       const coinRoute = await resolveCoinRoute({
@@ -601,19 +622,31 @@ export async function swapFromSmartAccount(input: {
       });
       routePath = isSell ? coinRoute.sellPath : coinRoute.buyPath;
       routePoolParams = isSell ? coinRoute.sellPoolParams : coinRoute.buyPoolParams;
-    } catch {
+    } catch (error) {
+      routeDiscoveryError = error;
       // Fall back to env-var-based deterministic routing
-      const route = isSell
-        ? resolveDeterministicSellRoute({
-            fromToken: input.fromToken,
-            toToken: input.toToken,
-            maxHops: 3,
-          })
-        : resolveDeterministicBuyRoute({
-            fromToken: input.fromToken,
-            toToken: input.toToken,
-            maxHops: 3,
-          });
+      let route;
+      try {
+        route = isSell
+          ? resolveDeterministicSellRoute({
+              fromToken: input.fromToken,
+              toToken: input.toToken,
+              maxHops: 3,
+            })
+          : resolveDeterministicBuyRoute({
+              fromToken: input.fromToken,
+              toToken: input.toToken,
+              maxHops: 3,
+            });
+      } catch (fallbackError) {
+        const primaryMessage =
+          routeDiscoveryError instanceof Error ? routeDiscoveryError.message : String(routeDiscoveryError);
+        const fallbackMessage =
+          fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+        throw new Error(
+          `Route discovery failed: ${primaryMessage}. Deterministic fallback failed: ${fallbackMessage}`,
+        );
+      }
       routePath = route.path;
       routePoolParams = route.poolParams;
 
@@ -807,7 +840,10 @@ export async function swapFromSmartAccount(input: {
       smartAccountName: input.smartAccountName,
       calls,
     });
-    return { ...opResult, amountOut: quotedAmountOut.toString() };
+    return {
+      ...opResult,
+      ...(opResult.status === "complete" ? { amountOut: quotedAmountOut.toString() } : {}),
+    };
   }
 
   const owner = await getCdpOwnerAccount();
@@ -835,6 +871,7 @@ export async function swapFromSmartAccount(input: {
     userOpHash,
     txHash: finalized.txHash,
     status: finalized.status,
+    ...(finalized.errorMessage ? { errorMessage: finalized.errorMessage } : {}),
   };
 }
 

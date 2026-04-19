@@ -1,4 +1,4 @@
-import { decodeAbiParameters, encodeFunctionData, type Address } from "viem";
+import { decodeAbiParameters, decodeErrorResult, encodeFunctionData, type Address, type Hex } from "viem";
 import type { HopPoolParams } from "./swapRoute.js";
 
 /** Minimal client interface — only needs `call()` for eth_call quotes. */
@@ -158,6 +158,27 @@ const quoteExactInputSingleAbi = [
   },
 ] as const;
 
+const wrappedQuoterErrorAbi = [
+  {
+    name: "UnexpectedRevertBytes",
+    type: "error",
+    inputs: [{ name: "revertData", type: "bytes" }],
+  },
+] as const;
+
+const knownV4QuoteErrorAbi = [
+  {
+    name: "PoolNotInitialized",
+    type: "error",
+    inputs: [],
+  },
+  {
+    name: "HookNotImplemented",
+    type: "error",
+    inputs: [],
+  },
+] as const;
+
 /** Parameters for a single-hop quote using the full PoolKey. */
 export interface QuoteSingleParams {
   chainId: number;
@@ -172,6 +193,74 @@ export interface QuoteSingleParams {
   zeroForOne: boolean;
   amountIn: bigint;
   hookData?: `0x${string}`;
+}
+
+function extractRevertData(error: unknown): Hex | null {
+  const queue: unknown[] = [error];
+  const seen = new Set<object>();
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || typeof current !== "object") continue;
+    if (seen.has(current)) continue;
+    seen.add(current);
+
+    const record = current as Record<string, unknown>;
+    const data = record.data;
+    if (typeof data === "string" && data.startsWith("0x")) {
+      return data as Hex;
+    }
+
+    if (record.cause) queue.push(record.cause);
+  }
+
+  return null;
+}
+
+export function describeKnownV4QuoteFailure(params: {
+  poolKey: QuoteSingleParams["poolKey"];
+}, error: unknown): string | null {
+  let revertData = extractRevertData(error);
+  if (!revertData || revertData === "0x") return null;
+
+  try {
+    const wrapped = decodeErrorResult({
+      abi: wrappedQuoterErrorAbi,
+      data: revertData,
+    });
+    if (wrapped.errorName === "UnexpectedRevertBytes") {
+      const nested = wrapped.args[0];
+      if (typeof nested === "string" && nested.startsWith("0x")) {
+        revertData = nested as Hex;
+      }
+    }
+  } catch {
+    // Not wrapped — keep the original revert payload.
+  }
+
+  try {
+    const decoded = decodeErrorResult({
+      abi: knownV4QuoteErrorAbi,
+      data: revertData,
+    });
+
+    switch (decoded.errorName) {
+      case "PoolNotInitialized":
+        return (
+          `V4 pool not initialized for ${params.poolKey.currency0} -> ${params.poolKey.currency1} ` +
+          `(fee=${params.poolKey.fee}, tickSpacing=${params.poolKey.tickSpacing}, hooks=${params.poolKey.hooks})`
+        );
+      case "HookNotImplemented":
+        return (
+          `V4 hook does not support quoting for ${params.poolKey.currency0} -> ${params.poolKey.currency1} ` +
+          `(hooks=${params.poolKey.hooks})`
+        );
+      default:
+        return null;
+    }
+  } catch {
+    return null;
+  }
 }
 
 /** Encode calldata for quoteExactInputSingle. Exported for testing. */
@@ -218,10 +307,19 @@ export async function quoteExactInputSingle(params: QuoteSingleParams): Promise<
     hookData,
   });
 
-  const { data } = await params.client.call({
-    to: quoterAddress,
-    data: calldata,
-  });
+  let data: `0x${string}` | undefined;
+  try {
+    ({ data } = await params.client.call({
+      to: quoterAddress,
+      data: calldata,
+    }));
+  } catch (error) {
+    const knownFailure = describeKnownV4QuoteFailure(params, error);
+    if (knownFailure) {
+      throw new Error(knownFailure, { cause: error });
+    }
+    throw error;
+  }
 
   if (!data) {
     throw new Error("V4 Quoter returned empty response");

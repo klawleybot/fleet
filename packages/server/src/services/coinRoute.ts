@@ -9,6 +9,8 @@
  * Returns a complete buy/sell route with pool params for each hop.
  */
 import { type Address, type Hex } from "viem";
+import { getChainConfig } from "./network.js";
+import { discoverPoolParams, type PoolDiscoveryClient } from "./poolDiscovery.js";
 import type { HopPoolParams } from "./swapRoute.js";
 
 // ---------------------------------------------------------------------------
@@ -54,6 +56,28 @@ const currencyAbi = [
   },
 ] as const;
 
+const getPoolKeyAbi = [
+  {
+    name: "getPoolKey",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "tuple",
+        components: [
+          { name: "currency0", type: "address" },
+          { name: "currency1", type: "address" },
+          { name: "fee", type: "uint24" },
+          { name: "tickSpacing", type: "int24" },
+          { name: "hooks", type: "address" },
+        ],
+      },
+    ],
+  },
+] as const;
+
 const balanceOfAbi = [
   {
     name: "balanceOf",
@@ -68,7 +92,7 @@ const balanceOfAbi = [
 // Minimal client interface (no `as any`)
 // ---------------------------------------------------------------------------
 
-export interface CoinRouteClient {
+export interface CoinRouteClient extends PoolDiscoveryClient {
   readContract(args: {
     address: Address;
     abi: readonly Record<string, unknown>[];
@@ -96,6 +120,29 @@ async function readPoolParamsFromStorage(
   client: CoinRouteClient,
   coinAddress: Address,
 ): Promise<HopPoolParams | null> {
+  try {
+    const poolKey = await client.readContract({
+      address: coinAddress,
+      abi: getPoolKeyAbi,
+      functionName: "getPoolKey",
+    }) as {
+      fee: number;
+      tickSpacing: number;
+      hooks: Address;
+    };
+
+    if (poolKey?.hooks) {
+      return {
+        fee: Number(poolKey.fee),
+        tickSpacing: Number(poolKey.tickSpacing),
+        hooks: poolKey.hooks,
+        hookData: "0x",
+      };
+    }
+  } catch {
+    // Older coins may not expose getPoolKey(); fall through to storage probing.
+  }
+
   // Read slots 2-14 (covers known Zora coin layouts)
   const slots: (Hex | undefined)[] = [];
   for (let i = 0; i <= 14; i++) {
@@ -173,6 +220,44 @@ async function readPoolParamsFromStorage(
     return { fee, tickSpacing, hooks: NATIVE_ETH, hookData: "0x" };
   }
 
+  // Some nested content coins split their metadata across adjacent slots:
+  // slot N     = parent currency
+  // slot N + 1 = coin address / flags
+  // slot N + 2 = hooks address
+  // slot N + 3 = [tickSpacing:uint8][fee:uint24][extra...]
+  for (let i = 0; i + 3 < slots.length; i++) {
+    const currencySlot = slots[i];
+    const selfSlot = slots[i + 1];
+    const hooksSlot = slots[i + 2];
+    const paramsSlot = slots[i + 3];
+
+    if (!currencySlot || !selfSlot || !hooksSlot || !paramsSlot) continue;
+    if (currencySlot === "0x" + "0".repeat(64)) continue;
+    if (selfSlot === "0x" + "0".repeat(64)) continue;
+    if (hooksSlot === "0x" + "0".repeat(64)) continue;
+    if (paramsSlot === "0x" + "0".repeat(64)) continue;
+
+    const currencyCandidate = currencySlot.slice(26).toLowerCase();
+    const selfCandidate = selfSlot.slice(26).toLowerCase();
+    if (currencyCandidate !== currencyLower) continue;
+    if (selfCandidate !== coinLower) continue;
+
+    const hooksCandidate = hooksSlot.slice(26);
+    if (hooksCandidate === "0".repeat(40)) continue;
+
+    const paramsHex = paramsSlot.slice(2);
+    const tickSpacing = parseInt(paramsHex.slice(50, 52), 16);
+    const fee = parseInt(paramsHex.slice(52, 58), 16);
+    if (fee <= 0 || fee > 100000 || tickSpacing <= 0 || tickSpacing > 16384) continue;
+
+    return {
+      fee,
+      tickSpacing,
+      hooks: `0x${hooksCandidate}` as `0x${string}`,
+      hookData: "0x",
+    };
+  }
+
   return null;
 }
 
@@ -217,9 +302,11 @@ export interface CoinRoute {
 export async function resolveCoinRoute(params: {
   client: CoinRouteClient;
   coinAddress: Address;
+  chainId?: number;
   maxDepth?: number;
 }): Promise<CoinRoute> {
   const { client, coinAddress, maxDepth = 6 } = params;
+  const chainId = params.chainId ?? getChainConfig().chainId;
 
   // Walk ancestry: coin → parent → ... → terminal anchor
   const ancestry: Address[] = [coinAddress];
@@ -240,23 +327,29 @@ export async function resolveCoinRoute(params: {
       break;
     }
 
-    // Read pool params from storage
-    let params = await readPoolParamsFromStorage(client, current);
-    if (!params) {
-      // Storage layout doesn't match known Zora coin patterns.
-      // This coin might be a non-standard contract (e.g. manually deployed
-      // token with a currency() view but different storage layout).
-      // Try common pool param combinations that work on Base V4 pools.
-      const COMMON_POOL_PARAMS: HopPoolParams[] = [
-        { fee: 10000, tickSpacing: 200, hooks: NATIVE_ETH, hookData: "0x" },
-        { fee: 3000, tickSpacing: 60, hooks: NATIVE_ETH, hookData: "0x" },
-        { fee: 500, tickSpacing: 10, hooks: NATIVE_ETH, hookData: "0x" },
-      ];
-      // Just use the most common Zora default — the quoter will validate it.
-      // If wrong, the swap will fail at quote time (not silently).
-      params = COMMON_POOL_PARAMS[0]!;
+    let poolParams = await readPoolParamsFromStorage(client, current);
+    const isHooklessPool =
+      poolParams?.hooks.toLowerCase() === NATIVE_ETH.toLowerCase();
+
+    // Storage-based discovery can miss hook addresses on some nested Zora pools.
+    // When that happens, fall back to factory event discovery instead of guessing.
+    if (!poolParams || isHooklessPool) {
+      try {
+        poolParams = await discoverPoolParams({
+          client,
+          chainId,
+          coinAddress: current,
+        });
+      } catch (error) {
+        if (!poolParams) throw error;
+      }
     }
-    hopParams.push(params);
+
+    if (!poolParams) {
+      throw new Error(`Could not resolve pool params for ${current} → ${parentCurrency}`);
+    }
+
+    hopParams.push(poolParams);
     ancestry.push(parentCurrency);
 
     // If parent is a terminal anchor (ZORA or USDC), we're done

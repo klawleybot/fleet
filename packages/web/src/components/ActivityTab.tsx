@@ -33,6 +33,15 @@ function TxLink({ hash }: { hash: `0x${string}` | null | undefined }) {
   );
 }
 
+function ErrorDetail({ message }: { message: string | null | undefined }) {
+  if (!message) return <span className="text-slate-600">—</span>;
+  return (
+    <span className="block max-w-md truncate text-xs text-rose-300" title={message}>
+      {message}
+    </span>
+  );
+}
+
 function TradeTable({ trades }: { trades: TradeRecord[] }) {
   if (trades.length === 0) return <p className="text-sm text-slate-400">No trades yet.</p>;
 
@@ -48,6 +57,7 @@ function TradeTable({ trades }: { trades: TradeRecord[] }) {
             <th className="pb-1 pr-3 text-right font-medium">Amount In</th>
             <th className="pb-1 pr-3 font-medium">Status</th>
             <th className="pb-1 pr-3 font-medium">Tx</th>
+            <th className="pb-1 pr-3 font-medium">Detail</th>
             <th className="pb-1 text-right font-medium">Age</th>
           </tr>
         </thead>
@@ -85,6 +95,9 @@ function TradeTable({ trades }: { trades: TradeRecord[] }) {
               <td className="py-1.5 pr-3">
                 <TxLink hash={t.txHash} />
               </td>
+              <td className="py-1.5 pr-3">
+                <ErrorDetail message={t.errorMessage} />
+              </td>
               <td className="py-1.5 text-right text-xs text-slate-500">{relTime(t.createdAt)}</td>
             </tr>
           ))}
@@ -108,6 +121,7 @@ function FundingTable({ records }: { records: FundingRecord[] }) {
             <th className="pb-1 pr-3 text-right font-medium">Amount</th>
             <th className="pb-1 pr-3 font-medium">Status</th>
             <th className="pb-1 pr-3 font-medium">Tx</th>
+            <th className="pb-1 pr-3 font-medium">Detail</th>
             <th className="pb-1 text-right font-medium">Age</th>
           </tr>
         </thead>
@@ -125,6 +139,9 @@ function FundingTable({ records }: { records: FundingRecord[] }) {
               </td>
               <td className="py-1.5 pr-3">
                 <TxLink hash={f.txHash} />
+              </td>
+              <td className="py-1.5 pr-3">
+                <ErrorDetail message={f.errorMessage} />
               </td>
               <td className="py-1.5 text-right text-xs text-slate-500">{relTime(f.createdAt)}</td>
             </tr>
@@ -148,6 +165,7 @@ function OperationsTable({ ops }: { ops: OperationRecord[] }) {
             <th className="pb-1 pr-3 font-medium">Cluster</th>
             <th className="pb-1 pr-3 font-medium">Status</th>
             <th className="pb-1 pr-3 font-medium">Requested by</th>
+            <th className="pb-1 pr-3 font-medium">Detail</th>
             <th className="pb-1 text-right font-medium">Age</th>
           </tr>
         </thead>
@@ -161,6 +179,9 @@ function OperationsTable({ ops }: { ops: OperationRecord[] }) {
                 <StatusBadge status={op.status} />
               </td>
               <td className="py-1.5 pr-3 text-xs text-slate-400">{op.requestedBy}</td>
+              <td className="py-1.5 pr-3">
+                <ErrorDetail message={op.errorMessage} />
+              </td>
               <td className="py-1.5 text-right text-xs text-slate-500">
                 {relTime(op.createdAt)}
               </td>
@@ -231,4 +252,3 @@ export function ActivityTab() {
     </div>
   );
 }
-

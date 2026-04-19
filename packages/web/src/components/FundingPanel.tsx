@@ -30,6 +30,15 @@ export function FundingPanel({
         toWalletIds: selectedWalletIds,
         amountWei,
       });
+      const failures = records.filter((record) => record.status !== "complete");
+      if (failures.length > 0) {
+        const detail = failures
+          .slice(0, 3)
+          .map((record) => `wallet ${record.toWalletId}: ${record.errorMessage ?? "failed"}`)
+          .join("; ");
+        const extra = failures.length > 3 ? ` (+${failures.length - 3} more)` : "";
+        setError(`Funded ${records.length - failures.length}/${records.length} wallet(s). ${detail}${extra}`);
+      }
       onFundingComplete(records);
     } catch (requestError) {
       const message =
@@ -70,4 +79,3 @@ export function FundingPanel({
     </section>
   );
 }
-

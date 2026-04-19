@@ -75,6 +75,7 @@ export class HttpBundlerAdapter implements BundlerAdapter {
       ...(raw.success !== undefined ? { success: raw.success } : {}),
       ...(raw.actualGasCost ? { actualGasCost: raw.actualGasCost } : {}),
       ...(raw.actualGasUsed ? { actualGasUsed: raw.actualGasUsed } : {}),
+      ...(typeof raw.reason === "string" ? { reason: raw.reason } : {}),
       raw,
     };
   }
