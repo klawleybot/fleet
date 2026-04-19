@@ -3,18 +3,20 @@ import { DashboardTab } from "./components/DashboardTab";
 import { FleetsTab } from "./components/FleetsTab";
 import { PositionsTab } from "./components/PositionsTab";
 import { ActivityTab } from "./components/ActivityTab";
+import { AutomationTab } from "./components/AutomationTab";
 import { ControlsTab } from "./components/ControlsTab";
 import { IntelligenceTab } from "./components/IntelligenceTab";
 import { fetchHealth, fetchFleets } from "./api/client";
 import type { HealthResponse, FleetInfo } from "./types";
 
-type Tab = "dashboard" | "fleets" | "positions" | "activity" | "controls" | "intel";
+type Tab = "dashboard" | "fleets" | "positions" | "activity" | "automation" | "controls" | "intel";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "dashboard", label: "Dashboard" },
   { id: "fleets", label: "Fleets" },
   { id: "positions", label: "Positions" },
   { id: "activity", label: "Activity" },
+  { id: "automation", label: "Automation" },
   { id: "controls", label: "Controls" },
   { id: "intel", label: "Intel" },
 ];
@@ -36,10 +38,11 @@ function ConnectionStatus({ health }: { health: HealthResponse | null | "error" 
       </span>
     );
   }
+  const fleetCount = health.activeFleetCount ?? health.fleetCount ?? 0;
   return (
     <span className="flex items-center gap-1.5 text-xs text-emerald-400">
       <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-      {health.fleetCount} fleet{health.fleetCount !== 1 ? "s" : ""}
+      {fleetCount} fleet{fleetCount !== 1 ? "s" : ""}
     </span>
   );
 }
@@ -47,7 +50,7 @@ function ConnectionStatus({ health }: { health: HealthResponse | null | "error" 
 export default function App() {
   const [tab, setTab] = useState<Tab>("dashboard");
   const [health, setHealth] = useState<HealthResponse | null | "error">(null);
-  const [fleetNames, setFleetNames] = useState<string[]>([]);
+  const [fleets, setFleets] = useState<FleetInfo[]>([]);
 
   useEffect(() => {
     async function checkHealth() {
@@ -65,8 +68,8 @@ export default function App() {
 
   const refreshFleets = useCallback(async () => {
     try {
-      const fleets: FleetInfo[] = await fetchFleets();
-      setFleetNames(fleets.map((f) => f.name));
+      const nextFleets = await fetchFleets();
+      setFleets(nextFleets);
     } catch {
       // ignore
     }
@@ -75,6 +78,8 @@ export default function App() {
   useEffect(() => {
     void refreshFleets();
   }, [refreshFleets]);
+
+  const fleetNames = fleets.map((fleet) => fleet.name);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
@@ -114,6 +119,7 @@ export default function App() {
         {tab === "fleets" && <FleetsTab />}
         {tab === "positions" && <PositionsTab />}
         {tab === "activity" && <ActivityTab />}
+        {tab === "automation" && <AutomationTab fleets={fleets} />}
         {tab === "controls" && <ControlsTab fleetNames={fleetNames} onFleetsChanged={() => void refreshFleets()} />}
         {tab === "intel" && <IntelligenceTab />}
       </main>

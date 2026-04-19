@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { isAddress } from "viem";
+import { createPublicClient, http, isAddress } from "viem";
 import {
   approveAndExecuteOperation,
   listOperations,
@@ -11,7 +11,9 @@ import {
 } from "../services/operations.js";
 import type { StrategyMode } from "../types.js";
 import type { ZoraSignalMode } from "../services/zoraSignals.js";
-import { resolveDeterministicBuyRoute } from "../services/swapRoute.js";
+import { getChainConfig } from "../services/network.js";
+import { resolvePreferredBuyRoute } from "../services/swapRoute.js";
+import type { CoinRouteClient } from "../services/coinRoute.js";
 
 interface FundingBody {
   clusterId?: number;
@@ -276,24 +278,37 @@ operationsRouter.post("/support-from-zora-signal", (req, res) => {
 
 operationsRouter.post("/route-preview", (req, res) => {
   const body = parseRoutePreviewBody(req.body);
-  if (typeof body.fromToken !== "string" || !isAddress(body.fromToken)) {
+  const fromToken = body.fromToken;
+  const toToken = body.toToken;
+  const maxHops = Number.isInteger(body.maxHops) ? Number(body.maxHops) : undefined;
+
+  if (typeof fromToken !== "string" || !isAddress(fromToken)) {
     return res.status(400).json({ error: "fromToken must be a valid EVM address" });
   }
-  if (typeof body.toToken !== "string" || !isAddress(body.toToken)) {
+  if (typeof toToken !== "string" || !isAddress(toToken)) {
     return res.status(400).json({ error: "toToken must be a valid EVM address" });
   }
 
-  try {
-    const route = resolveDeterministicBuyRoute({
-      fromToken: body.fromToken,
-      toToken: body.toToken,
-      ...(Number.isInteger(body.maxHops) ? { maxHops: Number(body.maxHops) } : {}),
-    });
-    return res.json({ route });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unexpected error";
-    return res.status(400).json({ error: message });
-  }
+  void (async () => {
+    try {
+      const cfg = getChainConfig();
+      const client = createPublicClient({
+        chain: cfg.chain,
+        transport: http(cfg.rpcUrl),
+      });
+      const route = await resolvePreferredBuyRoute({
+        client: client as unknown as CoinRouteClient,
+        chainId: cfg.chainId,
+        fromToken,
+        toToken,
+        ...(maxHops != null ? { maxHops } : {}),
+      });
+      res.json({ route });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unexpected error";
+      res.status(400).json({ error: message });
+    }
+  })();
 });
 
 operationsRouter.post("/:id/approve-execute", (req, res) => {

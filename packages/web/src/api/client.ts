@@ -1,5 +1,6 @@
 import type {
   AutonomyStatus,
+  DeterministicRoute,
   FleetDashboard,
   FleetInfo,
   FundingRecord,
@@ -15,6 +16,8 @@ import type {
   TradeRecord,
   Wallet,
   WatchlistItem,
+  ZoraSignalCandidate,
+  ZoraSignalMode,
 } from "../types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4020";
@@ -218,6 +221,60 @@ export async function importPosition(coinAddress: string): Promise<ImportPositio
 export async function fetchOperations(limit = 100): Promise<OperationRecord[]> {
   const payload = await request<{ operations: OperationRecord[] }>(`/operations?limit=${limit}`);
   return payload.operations;
+}
+
+export async function fetchZoraSignalCandidates(input: {
+  mode: ZoraSignalMode;
+  listName?: string;
+  minMomentum?: number;
+  limit?: number;
+}): Promise<ZoraSignalCandidate[]> {
+  const params = new URLSearchParams({ mode: input.mode });
+  if (input.listName) params.set("listName", input.listName);
+  if (input.minMomentum !== undefined) params.set("minMomentum", String(input.minMomentum));
+  if (input.limit !== undefined) params.set("limit", String(input.limit));
+
+  const payload = await request<{ candidates: ZoraSignalCandidate[] }>(`/operations/zora-signals?${params.toString()}`);
+  return payload.candidates;
+}
+
+export async function requestSupportFromZoraSignal(input: {
+  clusterId: number;
+  mode: ZoraSignalMode;
+  listName?: string;
+  minMomentum?: number;
+  totalAmountWei: string;
+  slippageBps: number;
+  strategyMode?: "sync" | "staggered" | "momentum";
+  requestedBy?: string;
+}): Promise<{ operation: OperationRecord }> {
+  return request<{ operation: OperationRecord }>("/operations/support-from-zora-signal", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchRoutePreview(input: {
+  fromToken: `0x${string}`;
+  toToken: `0x${string}`;
+  maxHops?: number;
+}): Promise<DeterministicRoute> {
+  const payload = await request<{ route: DeterministicRoute }>("/operations/route-preview", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  return payload.route;
+}
+
+export async function approveAndExecuteOperation(
+  operationId: number,
+  approvedBy?: string,
+): Promise<OperationRecord> {
+  const payload = await request<{ operation: OperationRecord }>(`/operations/${operationId}/approve-execute`, {
+    method: "POST",
+    body: JSON.stringify(approvedBy ? { approvedBy } : {}),
+  });
+  return payload.operation;
 }
 
 // ============================================================

@@ -80,7 +80,7 @@ export interface OperationRecord {
   type: OperationType;
   clusterId: number;
   status: OperationStatus;
-  requestedBy: string;
+  requestedBy: string | null;
   approvedBy: string | null;
   payloadJson: string;
   resultJson: string | null;
@@ -150,18 +150,66 @@ export interface GlobalDashboard {
 // Autonomy
 // ============================================================
 
+export type ZoraSignalMode = "top_momentum" | "watchlist_top";
+
+export interface ZoraSignalCandidate {
+  coinAddress: `0x${string}`;
+  symbol: string | null;
+  name: string | null;
+  momentumScore: number;
+  swaps24h: number;
+  netFlowUsd24h: number;
+  volume24h: number;
+  coinUrl: string;
+}
+
+export interface RouteHopPoolParams {
+  fee: number;
+  tickSpacing: number;
+  hooks: `0x${string}`;
+  hookData: `0x${string}`;
+}
+
+export interface DeterministicRoute {
+  path: `0x${string}`[];
+  hops: number;
+  poolParams?: RouteHopPoolParams[];
+}
+
+export interface AutonomyConfig {
+  enabled: boolean;
+  autoStart: boolean;
+  intervalSec: number;
+  clusterIds: number[];
+  signalMode: ZoraSignalMode;
+  watchlistName: string | null;
+  minMomentum: number | null;
+  totalAmountWei: string;
+  slippageBps: number;
+  strategyMode: "sync" | "staggered" | "momentum" | null;
+  requestedBy: string;
+  createRequests: boolean;
+  autoApprovePending: boolean;
+  pumpThreshold: number;
+  dipThreshold: number;
+  ownDiscountEnabled: boolean;
+}
+
+export interface AutonomyTick {
+  startedAt: string;
+  finishedAt: string;
+  createdOperationIds: number[];
+  executedOperationIds: number[];
+  skipped: Array<{ operationId?: number; reason: string }>;
+  errors: string[];
+}
+
 export interface AutonomyStatus {
   running: boolean;
   intervalSec: number;
   isTicking: boolean;
-  lastTick: {
-    startedAt: string;
-    finishedAt: string;
-    createdOperationIds: number[];
-    executedOperationIds: number[];
-    skipped: Array<{ operationId?: number; reason: string }>;
-    errors: string[];
-  } | null;
+  config: AutonomyConfig;
+  lastTick: AutonomyTick | null;
 }
 
 // ============================================================
@@ -257,9 +305,15 @@ export interface WatchlistItem {
 // ============================================================
 
 export interface HealthResponse {
-  status: string;
-  uptime: number;
-  fleetCount: number;
-  lastTrade: string | null;
-  masterBalance: string | null;
+  ok?: boolean;
+  status?: string;
+  uptime?: number;
+  uptimeSec?: number;
+  fleetCount?: number;
+  activeFleetCount?: number;
+  lastTrade?: string | null;
+  lastTradeAt?: string | null;
+  masterBalance?: string | null;
+  masterBalanceEth?: string | null;
+  startedAt?: string;
 }

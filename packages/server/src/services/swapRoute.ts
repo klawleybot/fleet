@@ -1,6 +1,8 @@
-import { isAddress } from "viem";
+import { isAddress, type Address } from "viem";
+import { resolveCoinRoute, type CoinRouteClient } from "./coinRoute.js";
 
 const WETH_BASE = "0x4200000000000000000000000000000000000006" as const;
+const NATIVE_ETH = "0x0000000000000000000000000000000000000000" as const;
 
 function normalize(address: string): `0x${string}` {
   return address.toLowerCase() as `0x${string}`;
@@ -57,6 +59,60 @@ export interface DeterministicRoute {
   path: `0x${string}`[];
   hops: number;
   poolParams?: HopPoolParams[];
+}
+
+function formatErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isEthLike(address: `0x${string}`): boolean {
+  const normalized = normalize(address);
+  return normalized === normalize(WETH_BASE) || normalized === normalize(NATIVE_ETH);
+}
+
+export async function resolvePreferredBuyRoute(input: {
+  client: CoinRouteClient;
+  fromToken: `0x${string}`;
+  toToken: `0x${string}`;
+  chainId?: number;
+  maxHops?: number;
+}): Promise<DeterministicRoute> {
+  const from = normalize(input.fromToken);
+  const to = normalize(input.toToken);
+  let routeDiscoveryError: unknown = null;
+
+  if (from !== to && isEthLike(from)) {
+    try {
+      const coinRoute = await resolveCoinRoute({
+        client: input.client,
+        coinAddress: to as Address,
+        ...(input.chainId != null && { chainId: input.chainId }),
+      });
+      return {
+        path: coinRoute.buyPath.map((address) => normalize(address)),
+        hops: coinRoute.buyPath.length - 1,
+        poolParams: coinRoute.buyPoolParams,
+      };
+    } catch (error) {
+      routeDiscoveryError = error;
+    }
+  }
+
+  try {
+    return resolveDeterministicBuyRoute({
+      fromToken: input.fromToken,
+      toToken: input.toToken,
+      ...(input.maxHops != null && { maxHops: input.maxHops }),
+    });
+  } catch (fallbackError) {
+    if (routeDiscoveryError) {
+      throw new Error(
+        `Route discovery failed: ${formatErrorMessage(routeDiscoveryError)}. ` +
+        `Deterministic fallback failed: ${formatErrorMessage(fallbackError)}`,
+      );
+    }
+    throw fallbackError;
+  }
 }
 
 /**

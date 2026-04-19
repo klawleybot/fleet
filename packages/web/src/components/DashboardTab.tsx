@@ -13,7 +13,7 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
 }
 
 function AutonomyPanel() {
-  const { status, isBusy, error, start, stop, tick } = useAutonomy();
+  const { status, error } = useAutonomy();
 
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-900 p-4">
@@ -37,33 +37,6 @@ function AutonomyPanel() {
 
       {error && <p className="mt-2 text-xs text-rose-400">{error}</p>}
 
-      <div className="mt-3 flex flex-wrap gap-2">
-        {status?.running ? (
-          <button
-            onClick={() => void stop()}
-            disabled={isBusy}
-            className="rounded bg-rose-700 px-3 py-1 text-xs font-medium hover:bg-rose-600 disabled:opacity-50"
-          >
-            Stop
-          </button>
-        ) : (
-          <button
-            onClick={() => void start()}
-            disabled={isBusy}
-            className="rounded bg-emerald-700 px-3 py-1 text-xs font-medium hover:bg-emerald-600 disabled:opacity-50"
-          >
-            Start
-          </button>
-        )}
-        <button
-          onClick={() => void tick()}
-          disabled={isBusy || status?.isTicking}
-          className="rounded bg-slate-700 px-3 py-1 text-xs font-medium hover:bg-slate-600 disabled:opacity-50"
-        >
-          Tick now
-        </button>
-      </div>
-
       {status?.lastTick && (
         <div className="mt-3 space-y-0.5 text-xs text-slate-400">
           <p>Last tick: {relTime(status.lastTick.finishedAt)}</p>
@@ -76,6 +49,10 @@ function AutonomyPanel() {
           )}
         </div>
       )}
+
+      <p className="mt-3 text-xs text-slate-500">
+        Controls and detailed config now live in the Automation tab.
+      </p>
     </div>
   );
 }

@@ -214,6 +214,8 @@ export function ActivityTab() {
     void refreshOps();
   }
 
+  const pendingOperationCount = operations.filter((operation) => operation.status === "pending").length;
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -245,6 +247,14 @@ export function ActivityTab() {
       </div>
 
       {error && <p className="text-xs text-rose-400">{error}</p>}
+
+      {activeTab === "operations" && (
+        <p className="text-xs text-slate-500">
+          {pendingOperationCount > 0
+            ? `${pendingOperationCount} pending operation(s). Use Automation → Queue to approve or execute queued work.`
+            : "Operations here are read-only history. Use Automation → Queue for approvals and queue management."}
+        </p>
+      )}
 
       {activeTab === "operations" && <OperationsTable ops={operations} />}
       {activeTab === "trades" && <TradeTable trades={trades} />}
