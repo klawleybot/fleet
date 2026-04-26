@@ -33,6 +33,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function hasHeaderGetter(value: unknown): value is { get(name: string): unknown } {
+  return isRecord(value) && typeof value.get === "function";
+}
+
 function parseRetryAfterHeader(value: string): number | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
@@ -47,7 +51,7 @@ function parseRetryAfterHeader(value: string): number | null {
 
 function getHeaderValue(headers: unknown, name: string): string | null {
   if (!headers) return null;
-  if (typeof headers === "object" && headers !== null && "get" in headers && typeof headers.get === "function") {
+  if (hasHeaderGetter(headers)) {
     const value = headers.get(name) ?? headers.get(name.toLowerCase());
     return typeof value === "string" ? value : null;
   }

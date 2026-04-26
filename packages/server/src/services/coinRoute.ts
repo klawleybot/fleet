@@ -253,7 +253,7 @@ async function readPoolParamsFromStorage(
     return {
       fee,
       tickSpacing,
-      hooks: `0x${hooksCandidate}` as `0x${string}`,
+      hooks: `0x${hooksCandidate}`,
       hookData: "0x",
     };
   }

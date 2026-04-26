@@ -1,11 +1,11 @@
 /**
  * Dashboard Service — Global and per-fleet P&L + available ETH
  */
-import { type Address, createPublicClient, formatEther, http } from "viem";
-import { getChainConfig } from "./network.js";
+import { type Address, formatEther } from "viem";
 import { getFleetStatus, type FleetSummary } from "./monitor.js";
 import { listFleets } from "./fleet.js";
 import { ensureMasterWallet } from "./wallet.js";
+import { getEthBalance } from "./balance.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -54,9 +54,6 @@ export interface GlobalDashboard {
 // ---------------------------------------------------------------------------
 
 export async function getFleetDashboard(fleetName: string): Promise<FleetDashboard> {
-  const chainCfg = getChainConfig();
-  const client = createPublicClient({ chain: chainCfg.chain, transport: http(chainCfg.rpcUrl) });
-
   const fleets = listFleets();
   const fleet = fleets.find((f) => f.name === fleetName);
   if (!fleet) throw new Error(`Fleet "${fleetName}" not found`);
@@ -65,7 +62,7 @@ export async function getFleetDashboard(fleetName: string): Promise<FleetDashboa
   const walletBalances: WalletBalance[] = [];
   let totalEth = 0n;
   for (const w of fleet.wallets) {
-    const bal = await client.getBalance({ address: w.address });
+    const bal = await getEthBalance(w.address);
     walletBalances.push({
       name: w.name,
       address: w.address,
@@ -93,12 +90,9 @@ export async function getFleetDashboard(fleetName: string): Promise<FleetDashboa
 }
 
 export async function getGlobalDashboard(): Promise<GlobalDashboard> {
-  const chainCfg = getChainConfig();
-  const client = createPublicClient({ chain: chainCfg.chain, transport: http(chainCfg.rpcUrl) });
-
   // Master wallet balance
   const master = await ensureMasterWallet();
-  const masterBal = await client.getBalance({ address: master.address });
+  const masterBal = await getEthBalance(master.address);
   const masterWallet: WalletBalance = {
     name: "master",
     address: master.address,

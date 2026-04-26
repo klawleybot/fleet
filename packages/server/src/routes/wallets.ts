@@ -123,11 +123,12 @@ walletsRouter.get("/:id/balance", (req, res) => {
   }
 
   const query = isTokenBalanceQuery(req.query) ? req.query : {};
+  const token = typeof query.token === "string" ? query.token : undefined;
 
   void (async () => {
     try {
       const ethResult = await getWalletEthBalance(id);
-      if (!query.token) {
+      if (!token) {
         res.json({
           wallet: ethResult.wallet,
           ethBalanceWei: ethResult.balanceWei,
@@ -135,16 +136,16 @@ walletsRouter.get("/:id/balance", (req, res) => {
         return;
       }
 
-      if (!isAddress(query.token)) {
+      if (!isAddress(token)) {
         res.status(400).json({ error: "token must be a valid EVM address" });
         return;
       }
 
-      const tokenBalance = await getErc20Balance(query.token, ethResult.wallet.address);
+      const tokenBalance = await getErc20Balance(token, ethResult.wallet.address);
       res.json({
         wallet: ethResult.wallet,
         ethBalanceWei: ethResult.balanceWei,
-        tokenAddress: query.token,
+        tokenAddress: token,
         tokenBalanceRaw: tokenBalance.toString(),
       });
     } catch (error) {

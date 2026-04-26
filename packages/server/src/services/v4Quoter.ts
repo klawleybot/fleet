@@ -231,7 +231,7 @@ export function describeKnownV4QuoteFailure(params: {
     if (wrapped.errorName === "UnexpectedRevertBytes") {
       const nested = wrapped.args[0];
       if (typeof nested === "string" && nested.startsWith("0x")) {
-        revertData = nested as Hex;
+        revertData = nested;
       }
     }
   } catch {

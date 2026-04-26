@@ -21,8 +21,6 @@ const ORIGINAL_ENV = new Map<string, string | undefined>(
 );
 
 type DbModule = typeof import("../src/db/index.js");
-type FundingModule = typeof import("../src/services/funding.js");
-type OperationsModule = typeof import("../src/services/operations.js");
 
 let currentDbModule: DbModule | null = null;
 

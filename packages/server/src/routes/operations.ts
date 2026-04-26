@@ -68,55 +68,59 @@ function parseStringQueryValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function isStrategyMode(value: unknown): value is StrategyMode {
+  return value === "sync" || value === "staggered" || value === "momentum";
+}
+
 function parseFundingBody(value: unknown): FundingBody {
   if (!isRecord(value)) return {};
-  return {
-    clusterId: typeof value.clusterId === "number" ? value.clusterId : undefined,
-    amountWei: typeof value.amountWei === "string" ? value.amountWei : undefined,
-    requestedBy: typeof value.requestedBy === "string" ? value.requestedBy : undefined,
-  };
+  const body: FundingBody = {};
+  if (typeof value.clusterId === "number") body.clusterId = value.clusterId;
+  if (typeof value.amountWei === "string") body.amountWei = value.amountWei;
+  if (typeof value.requestedBy === "string") body.requestedBy = value.requestedBy;
+  return body;
 }
 
 function parseTradeBody(value: unknown): TradeBody {
   if (!isRecord(value)) return {};
-  return {
-    clusterId: typeof value.clusterId === "number" ? value.clusterId : undefined,
-    coinAddress: typeof value.coinAddress === "string" ? value.coinAddress : undefined,
-    totalAmountWei: typeof value.totalAmountWei === "string" ? value.totalAmountWei : undefined,
-    slippageBps: typeof value.slippageBps === "number" ? value.slippageBps : undefined,
-    strategyMode: typeof value.strategyMode === "string" ? value.strategyMode as StrategyMode : undefined,
-    requestedBy: typeof value.requestedBy === "string" ? value.requestedBy : undefined,
-  };
+  const body: TradeBody = {};
+  if (typeof value.clusterId === "number") body.clusterId = value.clusterId;
+  if (typeof value.coinAddress === "string") body.coinAddress = value.coinAddress;
+  if (typeof value.totalAmountWei === "string") body.totalAmountWei = value.totalAmountWei;
+  if (typeof value.slippageBps === "number") body.slippageBps = value.slippageBps;
+  if (isStrategyMode(value.strategyMode)) body.strategyMode = value.strategyMode;
+  if (typeof value.requestedBy === "string") body.requestedBy = value.requestedBy;
+  return body;
 }
 
 function parseSignalSupportBody(value: unknown): SignalSupportBody {
   if (!isRecord(value)) return {};
-  return {
-    clusterId: typeof value.clusterId === "number" ? value.clusterId : undefined,
-    mode: value.mode === "top_momentum" || value.mode === "watchlist_top" ? value.mode : undefined,
-    listName: typeof value.listName === "string" ? value.listName : undefined,
-    minMomentum: typeof value.minMomentum === "number" ? value.minMomentum : undefined,
-    totalAmountWei: typeof value.totalAmountWei === "string" ? value.totalAmountWei : undefined,
-    slippageBps: typeof value.slippageBps === "number" ? value.slippageBps : undefined,
-    strategyMode: typeof value.strategyMode === "string" ? value.strategyMode as StrategyMode : undefined,
-    requestedBy: typeof value.requestedBy === "string" ? value.requestedBy : undefined,
-  };
+  const body: SignalSupportBody = {};
+  if (typeof value.clusterId === "number") body.clusterId = value.clusterId;
+  if (value.mode === "top_momentum" || value.mode === "watchlist_top") body.mode = value.mode;
+  if (typeof value.listName === "string") body.listName = value.listName;
+  if (typeof value.minMomentum === "number") body.minMomentum = value.minMomentum;
+  if (typeof value.totalAmountWei === "string") body.totalAmountWei = value.totalAmountWei;
+  if (typeof value.slippageBps === "number") body.slippageBps = value.slippageBps;
+  if (isStrategyMode(value.strategyMode)) body.strategyMode = value.strategyMode;
+  if (typeof value.requestedBy === "string") body.requestedBy = value.requestedBy;
+  return body;
 }
 
 function parseApproveBody(value: unknown): ApproveBody {
   if (!isRecord(value)) return {};
-  return {
-    approvedBy: typeof value.approvedBy === "string" ? value.approvedBy : undefined,
-  };
+  const body: ApproveBody = {};
+  if (typeof value.approvedBy === "string") body.approvedBy = value.approvedBy;
+  return body;
 }
 
 function parseRoutePreviewBody(value: unknown): RoutePreviewBody {
   if (!isRecord(value)) return {};
-  return {
-    fromToken: typeof value.fromToken === "string" ? value.fromToken : undefined,
-    toToken: typeof value.toToken === "string" ? value.toToken : undefined,
-    maxHops: typeof value.maxHops === "number" ? value.maxHops : undefined,
-  };
+  const body: RoutePreviewBody = {};
+  if (typeof value.fromToken === "string") body.fromToken = value.fromToken;
+  if (typeof value.toToken === "string") body.toToken = value.toToken;
+  if (typeof value.maxHops === "number") body.maxHops = value.maxHops;
+  return body;
 }
 
 operationsRouter.get("/", (req, res) => {
@@ -211,14 +215,16 @@ operationsRouter.post("/exit-coin", (req, res) => {
 });
 
 operationsRouter.get("/zora-signals", (req, res) => {
-  const query: SignalQuery = isRecord(req.query)
-    ? {
-        mode: req.query.mode === "top_momentum" || req.query.mode === "watchlist_top" ? req.query.mode : undefined,
-        listName: parseStringQueryValue(req.query.listName),
-        minMomentum: parseStringQueryValue(req.query.minMomentum),
-        limit: parseStringQueryValue(req.query.limit),
-      }
-    : {};
+  const query: SignalQuery = {};
+  if (isRecord(req.query)) {
+    if (req.query.mode === "top_momentum" || req.query.mode === "watchlist_top") query.mode = req.query.mode;
+    const listName = parseStringQueryValue(req.query.listName);
+    const minMomentum = parseStringQueryValue(req.query.minMomentum);
+    const limit = parseStringQueryValue(req.query.limit);
+    if (listName !== undefined) query.listName = listName;
+    if (minMomentum !== undefined) query.minMomentum = minMomentum;
+    if (limit !== undefined) query.limit = limit;
+  }
   const mode = query.mode ?? "top_momentum";
   if (mode !== "top_momentum" && mode !== "watchlist_top") {
     return res.status(400).json({ error: "mode must be top_momentum|watchlist_top" });

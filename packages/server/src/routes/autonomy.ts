@@ -11,9 +11,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function parseStartBody(value: unknown): StartBody {
   if (!isRecord(value)) return {};
-  return {
-    intervalSec: typeof value.intervalSec === "number" ? value.intervalSec : undefined,
-  };
+  const body: StartBody = {};
+  if (typeof value.intervalSec === "number") body.intervalSec = value.intervalSec;
+  return body;
 }
 
 export const autonomyRouter = Router();
@@ -29,7 +29,7 @@ autonomyRouter.post("/start", (req, res) => {
   }
 
   try {
-    return res.json(startAutonomyLoop({ ...(body.intervalSec ? { intervalSec: body.intervalSec } : {}) }));
+    return res.json(startAutonomyLoop({ ...(body.intervalSec !== undefined ? { intervalSec: body.intervalSec } : {}) }));
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected error";
     return res.status(400).json({ error: message });

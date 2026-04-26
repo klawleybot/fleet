@@ -107,6 +107,9 @@ positionsRouter.get("/wallet/:id", (req, res) => {
 /** GET /positions/coin/:address — positions across all wallets for a coin */
 positionsRouter.get("/coin/:address", (req, res) => {
   const coinAddress = req.params.address;
+  if (!isAddress(coinAddress)) {
+    return res.status(400).json({ error: "coin address must be a valid EVM address" });
+  }
   const positions = db.listPositionsByCoin(coinAddress);
   return res.json({ coinAddress, positions });
 });

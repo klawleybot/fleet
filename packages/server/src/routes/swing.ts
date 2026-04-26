@@ -14,22 +14,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function parseCreateSwingConfigInput(value: unknown): CreateSwingConfigInput | null {
   if (!isRecord(value)) return null;
-  if (typeof value.fleetName !== "string" || !isAddress(value.coinAddress)) return null;
+  if (typeof value.fleetName !== "string" || typeof value.coinAddress !== "string" || !isAddress(value.coinAddress)) {
+    return null;
+  }
 
   const trailingStopBps =
     value.trailingStopBps === null || typeof value.trailingStopBps === "number"
       ? value.trailingStopBps
       : undefined;
 
-  return {
+  const input: CreateSwingConfigInput = {
     fleetName: value.fleetName,
     coinAddress: value.coinAddress,
-    takeProfitBps: typeof value.takeProfitBps === "number" ? value.takeProfitBps : undefined,
-    stopLossBps: typeof value.stopLossBps === "number" ? value.stopLossBps : undefined,
-    trailingStopBps,
-    cooldownSec: typeof value.cooldownSec === "number" ? value.cooldownSec : undefined,
-    slippageBps: typeof value.slippageBps === "number" ? value.slippageBps : undefined,
   };
+  if (typeof value.takeProfitBps === "number") input.takeProfitBps = value.takeProfitBps;
+  if (typeof value.stopLossBps === "number") input.stopLossBps = value.stopLossBps;
+  if (trailingStopBps !== undefined) input.trailingStopBps = trailingStopBps;
+  if (typeof value.cooldownSec === "number") input.cooldownSec = value.cooldownSec;
+  if (typeof value.slippageBps === "number") input.slippageBps = value.slippageBps;
+  return input;
 }
 
 function parseUpdateSwingConfigPatch(value: unknown): UpdateSwingConfigPatch | null {

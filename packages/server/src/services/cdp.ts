@@ -613,8 +613,6 @@ export async function swapFromSmartAccount(input: {
     // Try on-chain route discovery first (coinRoute), fall back to env-var routing
     let routePath: `0x${string}`[];
     let routePoolParams: import("./swapRoute.js").HopPoolParams[] | undefined;
-    let routeDiscoveryError: unknown = null;
-
     try {
       const coinRoute = await resolveCoinRoute({
         client: toCoinRouteClient(publicClient),
@@ -622,8 +620,7 @@ export async function swapFromSmartAccount(input: {
       });
       routePath = isSell ? coinRoute.sellPath : coinRoute.buyPath;
       routePoolParams = isSell ? coinRoute.sellPoolParams : coinRoute.buyPoolParams;
-    } catch (error) {
-      routeDiscoveryError = error;
+    } catch (routeDiscoveryError) {
       // Fall back to env-var-based deterministic routing
       let route;
       try {
@@ -645,6 +642,7 @@ export async function swapFromSmartAccount(input: {
           fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
         throw new Error(
           `Route discovery failed: ${primaryMessage}. Deterministic fallback failed: ${fallbackMessage}`,
+          { cause: fallbackError },
         );
       }
       routePath = route.path;

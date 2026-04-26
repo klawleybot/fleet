@@ -2,9 +2,13 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import {
+  ChildProcessByStdio,
+  spawn,
+} from "node:child_process";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { IntelligenceEngine } from "@fleet/intelligence";
+import Stream from "node:stream";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WATCHLIST_NAME = "fleet-test";
@@ -13,14 +17,20 @@ const WATCHLIST_COIN = "0x6bd561fe098fa05d5412e2ba33553042a83fcc75" as const;
 let tmpDir = "";
 let anvilPort = 8545;
 let apiPort = 4029;
-let anvil: ChildProcessWithoutNullStreams | null = null;
-let server: ChildProcessWithoutNullStreams | null = null;
+let anvil: ChildProcessByStdio<null, Stream.Readable, Stream.Readable> | null =
+  null;
+let server: ChildProcessByStdio<null, Stream.Readable, Stream.Readable> | null =
+  null;
 
 function randomPort(base: number) {
   return base + Math.floor(Math.random() * 300);
 }
 
-async function waitFor(pred: () => Promise<boolean>, ms: number, label: string) {
+async function waitFor(
+  pred: () => Promise<boolean>,
+  ms: number,
+  label: string,
+) {
   const start = Date.now();
   while (Date.now() - start < ms) {
     if (await pred()) return;
@@ -35,8 +45,14 @@ function spawnProc(cmd: string, args: string[], env: NodeJS.ProcessEnv) {
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  child.stdout.on("data", (c) => { const l = String(c).trim(); if (l) console.log(`[${path.basename(cmd)}] ${l}`); });
-  child.stderr.on("data", (c) => { const l = String(c).trim(); if (l) console.error(`[${path.basename(cmd)}:err] ${l}`); });
+  child.stdout.on("data", (c) => {
+    const l = String(c).trim();
+    if (l) console.log(`[${path.basename(cmd)}] ${l}`);
+  });
+  child.stderr.on("data", (c) => {
+    const l = String(c).trim();
+    if (l) console.error(`[${path.basename(cmd)}:err] ${l}`);
+  });
   return child;
 }
 
@@ -57,12 +73,17 @@ describe("named fleets", () => {
     const zoraDbPath = path.join(tmpDir, "zora.db");
 
     const chainId = 8453;
-    
+
     const zoraEngine = new IntelligenceEngine({ dbPath: zoraDbPath });
     const zoraDb = zoraEngine.db;
-    zoraDb.prepare("INSERT OR REPLACE INTO coins (address, symbol, name, chain_id, volume_24h, raw_json, indexed_at) VALUES (?, ?, ?, ?, ?, '{}', datetime('now'))").run(WATCHLIST_COIN, "FLT", "FleetCoin", chainId, 100000);
-    zoraDb.prepare(
-      `INSERT OR REPLACE INTO coin_analytics (
+    zoraDb
+      .prepare(
+        "INSERT OR REPLACE INTO coins (address, symbol, name, chain_id, volume_24h, raw_json, indexed_at) VALUES (?, ?, ?, ?, ?, '{}', datetime('now'))",
+      )
+      .run(WATCHLIST_COIN, "FLT", "FleetCoin", chainId, 100000);
+    zoraDb
+      .prepare(
+        `INSERT OR REPLACE INTO coin_analytics (
         coin_address, momentum_score, swap_count_24h, net_flow_usdc_24h,
         momentum_acceleration_1h, net_flow_usdc_1h, swap_count_1h,
         unique_traders_1h, buy_count_1h, sell_count_1h, buy_volume_usdc_1h, sell_volume_usdc_1h,
@@ -70,33 +91,67 @@ describe("named fleets", () => {
         unique_traders_24h, buy_count_24h, sell_count_24h, buy_volume_usdc_24h, sell_volume_usdc_24h,
         updated_at
       ) VALUES (?, ?, ?, ?, 1.5, 200, 30, 10, 20, 10, 400, 300, 20, 80, 30, 1500, 1000, 4000, 2500, datetime('now'))`,
-    ).run(WATCHLIST_COIN, 5000, 3000, 1000);
-    zoraDb.prepare("INSERT OR REPLACE INTO coin_watchlist (list_name, coin_address, enabled, created_at, updated_at) VALUES (?, ?, 1, datetime('now'), datetime('now'))").run(WATCHLIST_NAME, WATCHLIST_COIN);
+      )
+      .run(WATCHLIST_COIN, 5000, 3000, 1000);
+    zoraDb
+      .prepare(
+        "INSERT OR REPLACE INTO coin_watchlist (list_name, coin_address, enabled, created_at, updated_at) VALUES (?, ?, 1, datetime('now'), datetime('now'))",
+      )
+      .run(WATCHLIST_NAME, WATCHLIST_COIN);
     zoraEngine.close();
 
     anvilPort = randomPort(8700);
     apiPort = randomPort(4200);
 
     const localAnvil = path.join(os.homedir(), ".foundry", "bin", "anvil");
-    const anvilCmd = process.env.ANVIL_BIN || (existsSync(localAnvil) ? localAnvil : "anvil");
+    const anvilCmd =
+      process.env.ANVIL_BIN || (existsSync(localAnvil) ? localAnvil : "anvil");
     const rpc = process.env.BASE_RPC_URL?.trim() || "https://mainnet.base.org";
 
-    anvil = spawnProc(anvilCmd, [
-      "--fork-url", rpc, "--host", "127.0.0.1", "--port", String(anvilPort),
-      "--chain-id", String(chainId), "--silent",
-    ], process.env);
+    anvil = spawnProc(
+      anvilCmd,
+      [
+        "--fork-url",
+        rpc,
+        "--host",
+        "127.0.0.1",
+        "--port",
+        String(anvilPort),
+        "--chain-id",
+        String(chainId),
+        "--silent",
+      ],
+      process.env,
+    );
 
-    await waitFor(async () => {
-      try {
-        const r = await fetch(`http://127.0.0.1:${anvilPort}`, {
-          method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
-        });
-        return r.ok;
-      } catch { return false; }
-    }, 60_000, "anvil");
+    await waitFor(
+      async () => {
+        try {
+          const r = await fetch(`http://127.0.0.1:${anvilPort}`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              id: 1,
+              method: "eth_chainId",
+              params: [],
+            }),
+          });
+          return r.ok;
+        } catch {
+          return false;
+        }
+      },
+      60_000,
+      "anvil",
+    );
 
-    const tsxBin = path.join(path.resolve(__dirname, "../../.."), "node_modules", ".bin", "tsx");
+    const tsxBin = path.join(
+      path.resolve(__dirname, "../../.."),
+      "node_modules",
+      ".bin",
+      "tsx",
+    );
     server = spawnProc(tsxBin, ["packages/server/src/index.ts"], {
       ...process.env,
       PORT: String(apiPort),
@@ -116,14 +171,20 @@ describe("named fleets", () => {
       AUTO_APPROVE_MAX_TRADE_WEI: "1000000000000000",
     });
 
-    await waitFor(async () => {
-      try {
-        const r = await fetch(`http://127.0.0.1:${apiPort}/health`);
-        if (!r.ok) return false;
-        const j = (await r.json()) as { ok?: boolean };
-        return j.ok === true;
-      } catch { return false; }
-    }, 60_000, "server");
+    await waitFor(
+      async () => {
+        try {
+          const r = await fetch(`http://127.0.0.1:${apiPort}/health`);
+          if (!r.ok) return false;
+          const j = (await r.json()) as { ok?: boolean };
+          return j.ok === true;
+        } catch {
+          return false;
+        }
+      },
+      60_000,
+      "server",
+    );
   }, 120_000);
 
   afterAll(() => {

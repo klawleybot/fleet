@@ -79,7 +79,7 @@ type PriceRow = {
 };
 
 type TransferLog = {
-  args?: {
+  args: {
     from?: Address;
     to?: Address;
     value?: bigint;
@@ -132,10 +132,25 @@ export class BadActorTracker {
     const rpcUrl = config.rpcUrl || process.env.BASE_RPC_URL;
     if (!rpcUrl) throw new Error("[bad-actor-tracker] BASE_RPC_URL required");
 
-    this.client = createPublicClient({
+    const publicClient = createPublicClient({
       chain: base,
       transport: http(rpcUrl),
     });
+    this.client = {
+      getBlockNumber: () => publicClient.getBlockNumber(),
+      getLogs: async (args) => {
+        const logs = await publicClient.getLogs(args);
+        return logs.map((log) => {
+          const transferLog: TransferLog = { args: {} };
+          if (log.args.from !== undefined) transferLog.args.from = log.args.from;
+          if (log.args.to !== undefined) transferLog.args.to = log.args.to;
+          if (log.args.value !== undefined) transferLog.args.value = log.args.value;
+          if (log.transactionHash !== undefined) transferLog.transactionHash = log.transactionHash;
+          if (log.blockNumber !== undefined) transferLog.blockNumber = log.blockNumber;
+          return transferLog;
+        });
+      },
+    };
 
     // Ensure schema
     this.ensureSchema();

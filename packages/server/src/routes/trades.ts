@@ -11,7 +11,9 @@ function isSwapRequestBody(value: unknown): value is SwapRequestBody {
   return (
     Array.isArray(body.walletIds) &&
     body.walletIds.every((walletId) => typeof walletId === "number") &&
+    typeof body.fromToken === "string" &&
     isAddress(body.fromToken) &&
+    typeof body.toToken === "string" &&
     isAddress(body.toToken) &&
     typeof body.amountInWei === "string" &&
     Number.isInteger(body.slippageBps)

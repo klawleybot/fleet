@@ -1,4 +1,4 @@
-import { isAddress, type Address } from "viem";
+import { isAddress } from "viem";
 import { resolveCoinRoute, type CoinRouteClient } from "./coinRoute.js";
 
 const WETH_BASE = "0x4200000000000000000000000000000000000006" as const;
@@ -85,7 +85,7 @@ export async function resolvePreferredBuyRoute(input: {
     try {
       const coinRoute = await resolveCoinRoute({
         client: input.client,
-        coinAddress: to as Address,
+        coinAddress: to,
         ...(input.chainId != null && { chainId: input.chainId }),
       });
       return {
@@ -109,6 +109,7 @@ export async function resolvePreferredBuyRoute(input: {
       throw new Error(
         `Route discovery failed: ${formatErrorMessage(routeDiscoveryError)}. ` +
         `Deterministic fallback failed: ${formatErrorMessage(fallbackError)}`,
+        { cause: fallbackError },
       );
     }
     throw fallbackError;

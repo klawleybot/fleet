@@ -1,22 +1,29 @@
 import { createPublicClient, erc20Abi, http } from "viem";
 import { getChainConfig } from "./network.js";
 
-const chainCfg = getChainConfig();
+function isMockMode(): boolean {
+  return process.env.CDP_MOCK_MODE === "1";
+}
 
-const publicClient = createPublicClient({
-  chain: chainCfg.chain,
-  transport: http(chainCfg.rpcUrl),
-});
+function getPublicClient() {
+  const chainCfg = getChainConfig();
+  return createPublicClient({
+    chain: chainCfg.chain,
+    transport: http(chainCfg.rpcUrl),
+  });
+}
 
 export async function getEthBalance(address: `0x${string}`): Promise<bigint> {
-  return publicClient.getBalance({ address });
+  if (isMockMode()) return 0n;
+  return getPublicClient().getBalance({ address });
 }
 
 export async function getErc20Balance(
   tokenAddress: `0x${string}`,
   holderAddress: `0x${string}`,
 ): Promise<bigint> {
-  const balance = await publicClient.readContract({
+  if (isMockMode()) return 0n;
+  const balance = await getPublicClient().readContract({
     address: tokenAddress,
     abi: erc20Abi,
     functionName: "balanceOf",
@@ -55,7 +62,22 @@ export async function getWalletBudgets(
     return { wallets: [], totalBudget: 0n, fundedCount: 0, emptyCount: 0 };
   }
 
+  if (isMockMode()) {
+    return {
+      wallets: wallets.map((wallet) => ({
+        walletId: wallet.id,
+        address: wallet.address,
+        balance: 0n,
+        funded: false,
+      })),
+      totalBudget: 0n,
+      fundedCount: 0,
+      emptyCount: wallets.length,
+    };
+  }
+
   // Batch balance lookups via multicall
+  const publicClient = getPublicClient();
   const balances = await Promise.all(
     wallets.map((w) => publicClient.getBalance({ address: w.address })),
   );
@@ -78,4 +100,3 @@ export async function getWalletBudgets(
 
   return { wallets: result, totalBudget, fundedCount, emptyCount };
 }
-

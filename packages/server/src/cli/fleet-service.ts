@@ -95,7 +95,10 @@ async function healthCheck(): Promise<{ ok: boolean; data?: HealthResponse; erro
       signal: AbortSignal.timeout(5000),
     });
     const data = parseHealthResponse(await res.json());
-    return { ok: res.ok, data };
+    return {
+      ok: res.ok,
+      ...(data !== undefined ? { data } : {}),
+    };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }

@@ -51,37 +51,41 @@ function isStrategyMode(value: unknown): value is FleetStrategyMode {
   return value === "sync" || value === "staggered" || value === "momentum";
 }
 
+function isInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value);
+}
+
 function parseCreateFleetBody(value: unknown): CreateFleetBody {
   if (!isRecord(value)) return {};
-  return {
-    name: typeof value.name === "string" ? value.name : undefined,
-    wallets: typeof value.wallets === "number" ? value.wallets : undefined,
-    fundAmountWei: typeof value.fundAmountWei === "string" ? value.fundAmountWei : undefined,
-    sourceFleetName: typeof value.sourceFleetName === "string" ? value.sourceFleetName : undefined,
-    strategyMode: isStrategyMode(value.strategyMode) ? value.strategyMode : undefined,
-  };
+  const body: CreateFleetBody = {};
+  if (typeof value.name === "string") body.name = value.name;
+  if (typeof value.wallets === "number") body.wallets = value.wallets;
+  if (typeof value.fundAmountWei === "string") body.fundAmountWei = value.fundAmountWei;
+  if (typeof value.sourceFleetName === "string") body.sourceFleetName = value.sourceFleetName;
+  if (isStrategyMode(value.strategyMode)) body.strategyMode = value.strategyMode;
+  return body;
 }
 
 function parseFleetTradeBody(value: unknown): FleetTradeBody {
   if (!isRecord(value)) return {};
-  return {
-    coinAddress: typeof value.coinAddress === "string" ? value.coinAddress : undefined,
-    totalAmountWei: typeof value.totalAmountWei === "string" ? value.totalAmountWei : undefined,
-    slippageBps: typeof value.slippageBps === "number" ? value.slippageBps : undefined,
-    overMs: typeof value.overMs === "number" ? value.overMs : undefined,
-    intervals: typeof value.intervals === "number" ? value.intervals : undefined,
-    jiggle: typeof value.jiggle === "boolean" ? value.jiggle : undefined,
-    jiggleFactor: typeof value.jiggleFactor === "number" ? value.jiggleFactor : undefined,
-  };
+  const body: FleetTradeBody = {};
+  if (typeof value.coinAddress === "string") body.coinAddress = value.coinAddress;
+  if (typeof value.totalAmountWei === "string") body.totalAmountWei = value.totalAmountWei;
+  if (typeof value.slippageBps === "number") body.slippageBps = value.slippageBps;
+  if (typeof value.overMs === "number") body.overMs = value.overMs;
+  if (typeof value.intervals === "number") body.intervals = value.intervals;
+  if (typeof value.jiggle === "boolean") body.jiggle = value.jiggle;
+  if (typeof value.jiggleFactor === "number") body.jiggleFactor = value.jiggleFactor;
+  return body;
 }
 
 function parseSweepBody(value: unknown): SweepBody {
   if (!isRecord(value)) return {};
-  return {
-    targetFleet: typeof value.targetFleet === "string" ? value.targetFleet : undefined,
-    targetAddress: typeof value.targetAddress === "string" ? value.targetAddress : undefined,
-    reserveWei: typeof value.reserveWei === "string" ? value.reserveWei : undefined,
-  };
+  const body: SweepBody = {};
+  if (typeof value.targetFleet === "string") body.targetFleet = value.targetFleet;
+  if (typeof value.targetAddress === "string") body.targetAddress = value.targetAddress;
+  if (typeof value.reserveWei === "string") body.reserveWei = value.reserveWei;
+  return body;
 }
 
 /** POST /fleets — create a named fleet */
@@ -168,7 +172,7 @@ fleetsRouter.post("/:name/buy", (req, res) => {
   if (!totalAmountWei) {
     return res.status(400).json({ error: "totalAmountWei is required" });
   }
-  if (!Number.isInteger(slippageBps)) {
+  if (!isInteger(slippageBps)) {
     return res.status(400).json({ error: "slippageBps must be an integer" });
   }
 
@@ -226,7 +230,7 @@ fleetsRouter.post("/:name/sell", (req, res) => {
   if (!totalAmountWei) {
     return res.status(400).json({ error: "totalAmountWei is required" });
   }
-  if (!Number.isInteger(slippageBps)) {
+  if (!isInteger(slippageBps)) {
     return res.status(400).json({ error: "slippageBps must be an integer" });
   }
 

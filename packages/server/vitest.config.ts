@@ -10,6 +10,11 @@ const testIntelDbPath = path.join(os.tmpdir(), `fleet-intel-test-${process.pid}.
 export default defineConfig({
   test: {
     include: ["tests/**/*.spec.ts"],
+    exclude: [
+      "tests/e2e*.spec.ts",
+      // Starts Anvil and a server process; keep it out of the default unit suite.
+      "tests/fleet.spec.ts",
+    ],
     setupFiles: ["tests/setup.ts"],
     // Run test files sequentially to avoid port contention when
     // multiple e2e tests spawn anvil + server processes simultaneously.

@@ -4,6 +4,18 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const tmpDirs: string[] = [];
+const ENV_KEYS = [
+  "VITEST",
+  "VITEST_SQLITE_PATH",
+  "SQLITE_PATH",
+] as const;
+const ORIGINAL_ENV = new Map<string, string | undefined>(
+  ENV_KEYS.map((key) => [key, process.env[key]]),
+);
+
+type DbModule = typeof import("../src/db/index.js");
+
+let currentDbModule: DbModule | null = null;
 
 function makeDbPath() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-campaigns-"));
@@ -11,11 +23,21 @@ function makeDbPath() {
   return path.join(dir, "test.sqlite");
 }
 
+function restoreEnv() {
+  for (const key of ENV_KEYS) {
+    const original = ORIGINAL_ENV.get(key);
+    if (original === undefined) delete process.env[key];
+    else process.env[key] = original;
+  }
+}
+
 async function loadModules(dbPath: string) {
   vi.resetModules();
   process.env.VITEST = "1";
+  process.env.VITEST_SQLITE_PATH = dbPath;
   process.env.SQLITE_PATH = dbPath;
   const dbMod = await import("../src/db/index.js");
+  currentDbModule = dbMod;
   const campaigns = await import("../src/services/campaigns.js");
   return { ...dbMod, ...campaigns };
 }
@@ -30,8 +52,9 @@ describe("campaign services", () => {
   });
 
   afterEach(() => {
-    delete process.env.SQLITE_PATH;
-    process.env.VITEST = "1";
+    currentDbModule?.resetDb();
+    currentDbModule = null;
+    restoreEnv();
     for (const dir of tmpDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
   });
 

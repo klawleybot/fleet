@@ -148,31 +148,33 @@ function parseIntelligenceCoinDetail(value: unknown): IntelligenceCoinDetail | n
   const coin = isRecord(value.coin) ? value.coin : undefined;
   const analytics = isRecord(value.analytics) ? value.analytics : undefined;
 
-  return {
-    coin: coin
-      ? { volume_24h: typeof coin.volume_24h === "number" || typeof coin.volume_24h === "string" ? coin.volume_24h : null }
-      : undefined,
-    analytics: analytics
-      ? {
-          swap_count_24h:
-            typeof analytics.swap_count_24h === "number" || typeof analytics.swap_count_24h === "string"
-              ? analytics.swap_count_24h
-              : null,
-          net_flow_usdc_24h:
-            typeof analytics.net_flow_usdc_24h === "number" || typeof analytics.net_flow_usdc_24h === "string"
-              ? analytics.net_flow_usdc_24h
-              : null,
-          momentum_score:
-            typeof analytics.momentum_score === "number" || typeof analytics.momentum_score === "string"
-              ? analytics.momentum_score
-              : null,
-          buy_count_24h:
-            typeof analytics.buy_count_24h === "number" || typeof analytics.buy_count_24h === "string"
-              ? analytics.buy_count_24h
-              : null,
-        }
-      : undefined,
-  };
+  const detail: IntelligenceCoinDetail = {};
+  if (coin) {
+    detail.coin = {
+      volume_24h: typeof coin.volume_24h === "number" || typeof coin.volume_24h === "string" ? coin.volume_24h : null,
+    };
+  }
+  if (analytics) {
+    detail.analytics = {
+      swap_count_24h:
+        typeof analytics.swap_count_24h === "number" || typeof analytics.swap_count_24h === "string"
+          ? analytics.swap_count_24h
+          : null,
+      net_flow_usdc_24h:
+        typeof analytics.net_flow_usdc_24h === "number" || typeof analytics.net_flow_usdc_24h === "string"
+          ? analytics.net_flow_usdc_24h
+          : null,
+      momentum_score:
+        typeof analytics.momentum_score === "number" || typeof analytics.momentum_score === "string"
+          ? analytics.momentum_score
+          : null,
+      buy_count_24h:
+        typeof analytics.buy_count_24h === "number" || typeof analytics.buy_count_24h === "string"
+          ? analytics.buy_count_24h
+          : null,
+    };
+  }
+  return detail;
 }
 
 async function getUniqueHolders(coinAddress: Address): Promise<number> {

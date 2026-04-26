@@ -1,18 +1,26 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { loadBundlerConfigFromEnv } from "../src/services/bundler/config.js";
 
-const ORIGINAL_ENV = { ...process.env };
+const ENV_KEYS = [
+  "BUNDLER_PRIMARY_URL",
+  "BUNDLER_PRIMARY_NAME",
+  "BUNDLER_SECONDARY_URL",
+  "BUNDLER_SECONDARY_NAME",
+  "BUNDLER_ENTRYPOINT",
+  "APP_NETWORK",
+  "PIMLICO_BASE_BUNDLER_URL",
+  "PIMLICO_BASE_SEPOLIA_BUNDLER_URL",
+] as const;
+const ORIGINAL_ENV = new Map<string, string | undefined>(
+  ENV_KEYS.map((key) => [key, process.env[key]]),
+);
 
 function resetEnv() {
-  process.env = { ...ORIGINAL_ENV };
-  delete process.env.BUNDLER_PRIMARY_URL;
-  delete process.env.BUNDLER_PRIMARY_NAME;
-  delete process.env.BUNDLER_SECONDARY_URL;
-  delete process.env.BUNDLER_SECONDARY_NAME;
-  delete process.env.BUNDLER_ENTRYPOINT;
-  delete process.env.APP_NETWORK;
-  delete process.env.PIMLICO_BASE_BUNDLER_URL;
-  delete process.env.PIMLICO_BASE_SEPOLIA_BUNDLER_URL;
+  for (const key of ENV_KEYS) {
+    const original = ORIGINAL_ENV.get(key);
+    if (original === undefined) delete process.env[key];
+    else process.env[key] = original;
+  }
 }
 
 afterEach(() => {

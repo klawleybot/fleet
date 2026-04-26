@@ -14,7 +14,7 @@
  */
 import { createPublicClient, http, formatEther, type Address } from "viem";
 import { db } from "../db/index.js";
-import type { WalletRecord } from "../types.js";
+import type { StrategyMode, WalletRecord } from "../types.js";
 import { transferFromSmartAccount } from "./cdp.js";
 import { createFleetWallets, ensureMasterWallet } from "./wallet.js";
 import {
@@ -23,6 +23,7 @@ import {
 } from "./operations.js";
 import { getFleetStatus, type FleetSummary } from "./monitor.js";
 import { getChainConfig } from "./network.js";
+import { getEthBalance } from "./balance.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -38,7 +39,7 @@ const GAS_PER_TRANSFER_WEI = 0n;
 export interface FleetInfo {
   clusterId: number;
   name: string;
-  strategyMode: string;
+  strategyMode: StrategyMode;
   wallets: WalletRecord[];
   createdAt: string;
 }
@@ -125,7 +126,7 @@ export async function createFleet(params: {
   walletCount: number;
   fundAmountWei?: string;
   sourceFleetName?: string;
-  strategyMode?: "sync" | "staggered" | "momentum";
+  strategyMode?: StrategyMode;
 }): Promise<FleetCreateResult> {
   const { name, walletCount, fundAmountWei, sourceFleetName, strategyMode = "sync" } = params;
 
@@ -337,16 +338,12 @@ export async function sweepFleet(params: {
 
   const reserveWei = params.reserveWei ?? 0n; // paymaster covers gas, no reserve needed
 
-  // Query balances
-  const chainCfg = getChainConfig();
-  const client = createPublicClient({ chain: chainCfg.chain, transport: http(chainCfg.rpcUrl) });
-
   const transfers: SweepResult["transfers"] = [];
   let totalSwept = 0n;
   let totalFailed = 0n;
 
   for (const wallet of source.wallets) {
-    const balance = await client.getBalance({ address: wallet.address });
+    const balance = await getEthBalance(wallet.address);
     const sendable = balance > reserveWei ? balance - reserveWei : 0n;
 
     if (sendable <= 0n) {

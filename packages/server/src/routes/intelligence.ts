@@ -39,12 +39,12 @@ function parseIntervalSec(value: unknown): number | undefined {
 
 function parseWatchlistBody(value: unknown): WatchlistBody {
   if (!isRecord(value)) return {};
-  return {
-    coinAddress: typeof value.coinAddress === "string" ? value.coinAddress : undefined,
-    listName: typeof value.listName === "string" ? value.listName : undefined,
-    label: typeof value.label === "string" ? value.label : undefined,
-    notes: typeof value.notes === "string" ? value.notes : undefined,
-  };
+  const body: WatchlistBody = {};
+  if (typeof value.coinAddress === "string") body.coinAddress = value.coinAddress;
+  if (typeof value.listName === "string") body.listName = value.listName;
+  if (typeof value.label === "string") body.label = value.label;
+  if (typeof value.notes === "string") body.notes = value.notes;
+  return body;
 }
 
 function isCoinDetailResponse(value: unknown): value is CoinDetailResponse {
