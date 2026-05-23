@@ -402,8 +402,10 @@ export class IntelligenceEngine {
   constructor(config: IntelligenceConfig = {}) {
     this.cfg = resolveConfig(config);
 
-    // Ensure .data directory exists
-    fs.mkdirSync(path.dirname(this.cfg.dbPath), { recursive: true });
+    const dbDir = path.dirname(this.cfg.dbPath);
+    if (!fs.existsSync(dbDir)) {
+      fs.mkdirSync(dbDir, { recursive: true });
+    }
 
     this.db = new Database(this.cfg.dbPath);
     applySchema(this.db);

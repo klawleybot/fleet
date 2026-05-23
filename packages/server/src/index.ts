@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./env.js";
 
 import { logger } from "./logger.js";
 
@@ -168,4 +168,3 @@ async function start(): Promise<void> {
 }
 
 void start();
-
